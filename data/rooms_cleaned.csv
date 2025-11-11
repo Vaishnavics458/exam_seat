@@ -1,0 +1,10 @@
+Room_Name,Floor,Total_Capacity,Bench_Capacity,Layout_Matrix,Rows,Columns
+603,6th floor,60,2,10 rows x 6 columns,10,6
+605,6th floor,60,2,10 rows x 6 columns,10,6
+606,6th floor,52,2,13 rows x 4 columns,13,4
+617,6th floor,60,2,10 rows x 6 columns,10,6
+726,7th floor,60,2,10 rows x 6 columns,10,6
+725,7th floor,60,2,10 rows x 6 columns,10,6
+601,6th floor,52,2,13 rows x 4 columns,13,4
+602,6th floor,52,2,13 rows x 4 columns,13,4
+727,7th floor,60,2,10 rows x 6 columns,10,6

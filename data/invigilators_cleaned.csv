@@ -1,0 +1,9 @@
+Invigilator_ID,Name,Course,Availability,Load_Score
+F001,Dr. Preeti Rao,"BCS501,BCS601","Mon 10am-1pm, Wed 2pm-5pm",1
+F002,Prof. Anil Kumar,"BME502,BME602","Tue 9am-12pm, Thu 10am-1pm",2
+F003,Dr. Meena Sharma,"BEC303,BEC602","Mon 2pm-5pm, Fri 10am-1pm",0
+F004,Mr. Rajesh Patel,CV204,"Tue 10am-1pm, Wed 9am-12pm",3
+F005,Dr. Kavita Nair,IS305,"Thu 9am-12pm, Tue 2pm-5pm",1
+F006,Prof. Suresh Iyer,IS405,"Mon 9am-12pm, Tue 2pm-5pm",2
+F007,Ms. Ritu Verma,MA106,"Wed 10am-1pm, Mon 10am-3pm",0
+F008,Dr. Neeraj Bhat,BCS501,"Tue 2pm-5pm, Thu 10am-1pm",1

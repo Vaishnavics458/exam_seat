@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+/* -------- Admin preview layout helpers (paste into src/index.css) -------- */
+
+.admin-preview-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* main column: must be able to shrink so flexbox doesn't overflow */
+.admin-preview-main {
+  flex: 1 1 0;
+  min-width: 0; /* critical: allow children to shrink inside flex */
+  overflow: visible;
+}
+
+/* fixed-width sidebar on the right (adjust width as needed) */
+.admin-preview-sidebar {
+  flex: 0 0 320px;
+  max-width: 320px;
+}
+
+/* seat-grid container inside each room card */
+.room-card .seat-grid {
+  width: 100%;
+  max-width: 100%;
+  /* allow both axis scrolling if the grid is larger */
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 0.5rem;
+}
+
+/* make seat cards more compact if needed (tweak to taste) */
+.seat-cell {
+  box-sizing: border-box;
+  min-width: 110px;
+  max-width: 180px;
+}
+
+/* responsive: stack sidebar below main on small screens */
+@media (max-width: 1100px) {
+  .admin-preview-layout {
+    flex-direction: column;
+  }
+  .admin-preview-sidebar {
+    width: 100%;
+    flex: 0 0 auto;
+    max-width: none;
+  }
+}

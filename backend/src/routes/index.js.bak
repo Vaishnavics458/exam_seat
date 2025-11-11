@@ -1,0 +1,106 @@
+// backend/src/routes/index.js
+const express = require('express');
+const router = express.Router();
+const db = require('../models/db');
+
+const seatingService = require('../services/seating.service');
+const invigService = require('../services/invigilation.service');
+
+/**
+ * Simple list endpoints
+ */
+// add near other routes in backend/src/routes/index.js
+// GET /api/exams/:examId/preview
+// returns: { exam_id, rooms: [ { room_id, room_name, rows, cols, seats: [{ seat_id, row, col, student: {name, roll_number} | null }] } ] }
+router.get('/exams/:examId/preview', async (req, res) => {
+  const examId = req.params.examId;
+  try {
+    // find exam row
+    const examRow = await db.query('SELECT id, exam_id, date, time_slot FROM exams WHERE exam_id = $1', [examId]);
+    if (examRow.rowCount === 0) return res.status(404).json({ error: 'Exam not found' });
+    const examPk = examRow.rows[0].id;
+
+    // fetch rooms and their capacities/layout
+    const roomsRes = await db.query('SELECT id, room_name, capacity, rows, cols FROM rooms ORDER BY room_name');
+    const rooms = roomsRes.rows;
+
+    // fetch seat assignments for this exam
+    const saRes = await db.query(`
+      SELECT sa.seat_id, sa.room_id, sa.student_id, s.name AS student_name, s.roll_number
+      FROM seat_assignments sa
+      JOIN students s ON s.id = sa.student_id
+      WHERE sa.exam_id = $1
+    `, [examPk]);
+
+    // build map keyed by room_id -> list of assignments
+    const assignmentsByRoom = {};
+    for (const r of saRes.rows) {
+      if (!assignmentsByRoom[r.room_id]) assignmentsByRoom[r.room_id] = [];
+      assignmentsByRoom[r.room_id].push({
+        seat_id: r.seat_id,
+        student: r.student_id ? { name: r.student_name, roll_number: r.roll_number } : null
+      });
+    }
+
+    // helper to parse seat id like 'r1c2' or 'R1C2' -> {row:1, col:2}
+    const parseSeatId = (sid) => {
+      if (!sid) return null;
+      const m = sid.match(/r(\d+)[c_]?(\d+)/i);
+      if (m) return { row: parseInt(m[1], 10), col: parseInt(m[2], 10) };
+      return null;
+    };
+
+    // build room grids
+    const roomGrids = rooms.map(room => {
+      // determine rows & cols
+      let rowsCount = room.rows || null;
+      let colsCount = room.cols || null;
+      if (!rowsCount || !colsCount) {
+        const cap = room.capacity || 30;
+        const approx = Math.ceil(Math.sqrt(cap));
+        rowsCount = rowsCount || approx;
+        colsCount = colsCount || Math.ceil(cap / rowsCount);
+      }
+
+      // init seats matrix with nulls
+      const seats = [];
+      for (let r = 1; r <= rowsCount; r++) {
+        for (let c = 1; c <= colsCount; c++) {
+          const seatId = `r${r}c${c}`;
+          seats.push({ seat_id: seatId, row: r, col: c, student: null });
+        }
+      }
+
+      // overlay actual assignments if any (match by seat_id or try parse)
+      const assigned = assignmentsByRoom[room.id] || [];
+      for (const a of assigned) {
+        if (!a.seat_id) continue;
+        // first try exact match
+        const idx = seats.findIndex(s => s.seat_id.toLowerCase() === a.seat_id.toLowerCase());
+        if (idx >= 0) {
+          seats[idx].student = a.student;
+          continue;
+        }
+        // try parse pattern r{row}c{col}
+        const coords = parseSeatId(a.seat_id);
+        if (coords) {
+          const atIdx = seats.findIndex(s => s.row === coords.row && s.col === coords.col);
+          if (atIdx >= 0) seats[atIdx].student = a.student;
+        }
+      }
+
+      return {
+        room_id: room.id,
+        room_name: room.room_name,
+        rows: rowsCount,
+        cols: colsCount,
+        seats
+      };
+    });
+
+    return res.json({ exam_id: examId, rooms: roomGrids });
+  } catch (err) {
+    console.error('GET /exams/:examId/preview error', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
