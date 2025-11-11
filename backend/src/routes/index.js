@@ -1,4 +1,5 @@
 ﻿// backend/src/routes/index.js
+const authRoutes = require('./auth.routes');
 const express = require('express');
 const router = express.Router();
 const db = require('../models/db');
@@ -8,6 +9,8 @@ const seatingService = require('../services/seating.service');
 // utils
 const { detectAssignTable } = require('../utils/schema-utils');
 const { parseSeatId } = require('../utils/seat-utils');
+
+router.use('/auth', authRoutes);
 
 /* GET /api/exams - list exams */
 router.get('/exams', async function (req, res) {
