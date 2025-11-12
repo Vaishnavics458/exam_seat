@@ -1,16 +1,19 @@
 ﻿// backend/src/routes/index.js
 const authRoutes = require('./auth.routes');
+const adminRoutes = require('./admin.routes');
 const express = require('express');
 const router = express.Router();
 const db = require('../models/db');
 const invigService = require('../services/invigilation.service');
 const seatingService = require('../services/seating.service');
+const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
 
 // utils
 const { detectAssignTable } = require('../utils/schema-utils');
 const { parseSeatId } = require('../utils/seat-utils');
 
 router.use('/auth', authRoutes);
+router.use('/admin', adminRoutes);
 
 /* GET /api/exams - list exams */
 router.get('/exams', async function (req, res) {
@@ -34,11 +37,32 @@ router.get('/rooms', async function (req, res) {
   }
 });
 
-/* GET /api/students/:roll_number/seating
-   Returns student info and seating assignments (possibly empty) */
-router.get('/students/:roll_number/seating', async function (req, res) {
-  const roll = req.params.roll_number;
+// GET /api/students/:roll_number/seating
+// Protected student seating - paste replacement for existing handler
+// Requires: const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
+// Keep this route AFTER router.use('/auth', authRoutes);
+
+router.get('/students/:roll_number/seating', authenticate, async function (req, res) {
+  const requestedRoll = req.params.roll_number;
   try {
+    // If the logged in user is a student - they can only fetch their own roll number
+    if (req.user && req.user.role === 'student') {
+      if (!req.user.roll_number) {
+        return res.status(403).json({ error: 'Student account missing roll_number' });
+      }
+      if (String(req.user.roll_number).toLowerCase() !== String(requestedRoll).toLowerCase()) {
+        return res.status(403).json({ error: 'Students may only view their own seating' });
+      }
+    }
+
+    // If the logged in user is an invigilator, they should not access arbitrary student seating
+    if (req.user && req.user.role === 'invigilator') {
+      return res.status(403).json({ error: 'Invigilators may not view individual student seating' });
+    }
+
+    // Admins are allowed (req.user.role === 'admin') - proceed
+
+    const roll = requestedRoll;
     const q = ''
       + 'SELECT s.id AS student_pk, s.student_id, s.roll_number, s.name AS student_name, '
       + '       e.exam_id, e.date, e.time_slot, '
@@ -80,6 +104,7 @@ router.get('/students/:roll_number/seating', async function (req, res) {
     return res.status(500).json({ error: 'Server error' });
   }
 });
+
 
 /* GET /api/exams/:examId/preview
    Returns rooms and seat grids for an exam
@@ -270,13 +295,42 @@ router.get('/invigilators', async (req, res) => {
 });
 
 // GET /api/invigilators/:id/duties
-router.get('/invigilators/:id/duties', async (req, res) => {
-  const invId = req.params.id;
+// Protected invigilator duties - paste replacement for existing handler
+router.get('/invigilators/:id/duties', authenticate, async (req, res) => {
+  const invIdParam = req.params.id;
+
   try {
-    // 1) Detect assignment table name (common variants)
+    // If logged in user is invigilator, allow only their own id or name matching
+    if (req.user && req.user.role === 'invigilator') {
+      // If token has numeric id, enforce it; else try to match by name
+      const userInvId = req.user.id || null;
+      const userName = (req.user.name || '').toLowerCase();
+
+      // If route used a numeric id, block if not matching token id
+      if (userInvId) {
+        if (String(userInvId) !== String(invIdParam)) {
+          return res.status(403).json({ error: 'Invigilators may only view their own duties' });
+        }
+      } else if (userName) {
+        // if route used name (not numeric id), allow only if name matches the logged-in name
+        // fetch the target invigilator name quickly to compare (defensive)
+        const row = await db.query('SELECT id, name FROM invigilators WHERE id = $1 OR name ILIKE $2 LIMIT 1', [invIdParam, invIdParam]);
+        if (row.rowCount === 0) return res.status(404).json({ error: 'Invigilator not found' });
+        const targetName = (row.rows[0].name || '').toLowerCase();
+        if (targetName !== userName && String(row.rows[0].id) !== String(userInvId)) {
+          return res.status(403).json({ error: 'Invigilators may only view their own duties' });
+        }
+      } else {
+        return res.status(403).json({ error: 'Invigilator token lacks identity' });
+      }
+    }
+
+    // Admins may fetch any invigilator duties (no restriction)
+
+    // Proceed with original duties logic (use detectAssignTable helper)
     const assignTable = await detectAssignTable();
 
-    // 2) Detect which columns exist on that table (so we won't reference missing ones)
+    // detect which columns exist on that table (so we won't reference missing ones)
     const colRes = await db.query(`
       SELECT column_name
       FROM information_schema.columns
@@ -284,28 +338,20 @@ router.get('/invigilators/:id/duties', async (req, res) => {
     `, [assignTable]);
     const assignCols = (colRes.rows || []).map(r => r.column_name);
 
-    // build the select list dynamically and safely
     const selectCols = [];
-    // always include id, invigilator_id, exam_id, room_id if present
     if (assignCols.includes('id')) selectCols.push('ia.id AS assign_id');
     if (assignCols.includes('invigilator_id')) selectCols.push('ia.invigilator_id');
     if (assignCols.includes('exam_id')) selectCols.push('ia.exam_id');
     if (assignCols.includes('room_id')) selectCols.push('ia.room_id');
 
-    // optional: special_instructions or notes
     const hasNotes = assignCols.includes('special_instructions') || assignCols.includes('notes') || assignCols.includes('instruction');
     if (hasNotes) {
-      // prefer the actual column name present
       const noteCol = assignCols.includes('special_instructions') ? 'special_instructions' : (assignCols.includes('notes') ? 'notes' : 'instruction');
       selectCols.push(`ia.${noteCol} AS special_instructions`);
     }
 
-    // If no useful columns found, return empty duties quickly
-    if (selectCols.length === 0) {
-      return res.json({ invigilator_id: invId, duties: [] });
-    }
+    if (selectCols.length === 0) return res.json({ invigilator_id: invIdParam, duties: [] });
 
-    // 3) Compose query (join exams + rooms for friendly output)
     const q = `
       SELECT ${selectCols.join(', ')},
              e.exam_id AS exam_code,
@@ -317,13 +363,11 @@ router.get('/invigilators/:id/duties', async (req, res) => {
       WHERE ia.invigilator_id = $1
       ORDER BY e.date, e.time_slot, ia.id;
     `;
-
-    const result = await db.query(q, [invId]).catch(err => {
+    const result = await db.query(q, [invIdParam]).catch(err => {
       console.warn('invigilator duties query failed, returning empty', err && err.message);
       return { rows: [] };
     });
 
-    // 4) Normalize output
     const duties = (result.rows || []).map(row => ({
       assign_id: row.assign_id || null,
       exam_id: row.exam_id || row.exam_code || null,
@@ -335,35 +379,42 @@ router.get('/invigilators/:id/duties', async (req, res) => {
       special_instructions: row.special_instructions || null
     }));
 
-    return res.json({ invigilator_id: invId, duties });
+    return res.json({ invigilator_id: invIdParam, duties });
   } catch (err) {
     console.error('GET /invigilators/:id/duties error', err && err.message);
     return res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /api/exams/:examId/generate-invigilation
-router.post('/exams/:examId/generate-invigilation', async (req, res) => {
-  const examIdParam = req.params.examId;
-  try {
-    const examRow = await db.query('SELECT id FROM exams WHERE exam_id = $1', [examIdParam]);
-    if (examRow.rowCount === 0) {
-      return res.status(404).json({ status: 'error', error: 'Exam not found' });
+// -----------------------------
+// Protected invig generation (admin only)
+// -----------------------------
+router.post(
+  '/exams/:examId/generate-invigilation',
+  authenticate,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    const examIdParam = req.params.examId;
+    try {
+      const examRow = await db.query('SELECT id FROM exams WHERE exam_id = $1', [examIdParam]);
+      if (examRow.rowCount === 0) {
+        return res.status(404).json({ status: 'error', error: 'Exam not found' });
+      }
+      const examPk = examRow.rows[0].id;
+
+      const perRoom = Number(req.query.perRoom) || 1;
+      const result = await invigService.assignInvigilatorsForExam(examPk, perRoom);
+
+      if (result.status === 'ok') return res.json(result);
+      return res.status(500).json(result);
+    } catch (err) {
+      console.error('POST /exams/:examId/generate-invigilation error', err);
+      return res.status(500).json({ status: 'error', error: String(err) });
     }
-    const examPk = examRow.rows[0].id;
-
-    const perRoom = Number(req.query.perRoom) || 1;
-    const result = await invigService.assignInvigilatorsForExam(examPk, perRoom);
-
-    if (result.status === 'ok') return res.json(result);
-    return res.status(500).json(result);
-  } catch (err) {
-    console.error('POST /exams/:examId/generate-invigilation error', err);
-    return res.status(500).json({ status: 'error', error: String(err) });
   }
-});
+);
 
-// GET /api/exams/:examId/invigilation
+// GET /api/exams/:examId/invigilation (safe public / admin view)
 router.get('/exams/:examId/invigilation', async (req, res) => {
   const examIdParam = req.params.examId;
   try {
@@ -405,160 +456,175 @@ router.get('/exams/:examId/invigilation', async (req, res) => {
   }
 });
 
-// --- Manual assign / unassign endpoints (paste into backend/src/routes/index.js) ---
+// --- Manual assign / unassign endpoints (protected admin) ---
 
 // POST /api/exams/:examId/assign-room
-router.post('/exams/:examId/assign-room', async (req, res) => {
-  const examIdParam = req.params.examId;
-  const { room_id, invigilator_id } = req.body || {};
-  if (!room_id || !invigilator_id) return res.status(400).json({ error: 'room_id and invigilator_id required' });
+router.post(
+  '/exams/:examId/assign-room',
+  authenticate,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    const examIdParam = req.params.examId;
+    const { room_id, invigilator_id } = req.body || {};
+    if (!room_id || !invigilator_id) return res.status(400).json({ error: 'room_id and invigilator_id required' });
 
-  try {
-    // exam pk
-    const examRow = await db.query('SELECT id FROM exams WHERE exam_id = $1', [examIdParam]);
-    if (examRow.rowCount === 0) return res.status(404).json({ error: 'Exam not found' });
-    const examPk = examRow.rows[0].id;
-
-    // detect assign table (same helper as earlier)
-    const assignTable = await detectAssignTable();
-
-    // ensure invigilator exists
-    const invRes = await db.query('SELECT id FROM invigilators WHERE id = $1', [invigilator_id]);
-    if (invRes.rowCount === 0) return res.status(404).json({ error: `Invigilator id ${invigilator_id} not found` });
-
-    // ensure room exists
-    const roomRes = await db.query('SELECT id FROM rooms WHERE id = $1', [room_id]);
-    if (roomRes.rowCount === 0) return res.status(404).json({ error: `Room id ${room_id} not found` });
-
-    // optional: prevent double-booked invigilator for same exam/time
-    const alreadyQ = `SELECT 1 FROM ${assignTable} ia WHERE ia.invigilator_id = $1 AND ia.exam_id = $2 LIMIT 1`;
-    const already = await db.query(alreadyQ, [invigilator_id, examPk]);
-    if (already.rowCount > 0) {
-      return res.status(409).json({ error: 'Invigilator already assigned for this exam (conflict).' });
-    }
-
-    // insert safe (handle created_at absence)
     try {
-      const insQ = `INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id, created_at) VALUES ($1,$2,$3,NOW()) RETURNING id`;
-      const ir = await db.query(insQ, [examPk, room_id, invigilator_id]);
-      return res.json({ status: 'ok', assignment_id: ir.rows[0].id });
-    } catch (insErr) {
-      if (insErr.message && insErr.message.includes('created_at')) {
-        const ir2 = await db.query(`INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id) VALUES ($1,$2,$3) RETURNING id`, [examPk, room_id, invigilator_id]);
-        return res.json({ status: 'ok', assignment_id: ir2.rows[0].id });
+      // exam pk
+      const examRow = await db.query('SELECT id FROM exams WHERE exam_id = $1', [examIdParam]);
+      if (examRow.rowCount === 0) return res.status(404).json({ error: 'Exam not found' });
+      const examPk = examRow.rows[0].id;
+
+      // detect assign table (same helper as earlier)
+      const assignTable = await detectAssignTable();
+
+      // ensure invigilator exists
+      const invRes = await db.query('SELECT id FROM invigilators WHERE id = $1', [invigilator_id]);
+      if (invRes.rowCount === 0) return res.status(404).json({ error: `Invigilator id ${invigilator_id} not found` });
+
+      // ensure room exists
+      const roomRes = await db.query('SELECT id FROM rooms WHERE id = $1', [room_id]);
+      if (roomRes.rowCount === 0) return res.status(404).json({ error: `Room id ${room_id} not found` });
+
+      // optional: prevent double-booked invigilator for same exam/time
+      const alreadyQ = `SELECT 1 FROM ${assignTable} ia WHERE ia.invigilator_id = $1 AND ia.exam_id = $2 LIMIT 1`;
+      const already = await db.query(alreadyQ, [invigilator_id, examPk]);
+      if (already.rowCount > 0) {
+        return res.status(409).json({ error: 'Invigilator already assigned for this exam (conflict).' });
       }
-      console.error('Manual assign insert error', insErr);
-      return res.status(500).json({ error: 'Insert failed', detail: String(insErr) });
-    }
-  } catch (err) {
-    console.error('POST /assign-room error', err && err.message);
-    return res.status(500).json({ error: 'Server error' });
-  }
-});
 
-// POST /api/exams/:examId/assign-room-smart
-router.post('/exams/:examId/assign-room-smart', async (req, res) => {
-  const examIdParam = req.params.examId;
-  const { room_id: roomId, invigilator_id: invId } = req.body || {};
-
-  if (!roomId || !invId) {
-    return res.status(400).json({ error: 'Missing room_id or invigilator_id in request body' });
-  }
-
-  try {
-    // 1) find exam PK
-    const examRow = await db.query('SELECT id FROM exams WHERE exam_id = $1', [examIdParam]);
-    if (examRow.rowCount === 0) return res.status(404).json({ error: 'Exam not found' });
-    const examPk = examRow.rows[0].id;
-
-    // 2) verify invigilator exists
-    const invRow = await db.query('SELECT id FROM invigilators WHERE id = $1', [invId]);
-    if (invRow.rowCount === 0) return res.status(404).json({ error: 'Invigilator not found' });
-
-    // 3) verify room exists
-    const roomRow = await db.query('SELECT id FROM rooms WHERE id = $1', [roomId]);
-    if (roomRow.rowCount === 0) return res.status(404).json({ error: 'Room not found' });
-
-    // 4) detect assignment table name (defensive)
-    const assignTable = await detectAssignTable();
-
-    // 5) Transaction: delete old assignment for same exam+invigilator, then insert new
-    await db.query('BEGIN');
-
-    // delete any existing assignment for this invigilator on this exam (if present)
-    await db.query(`DELETE FROM ${assignTable} WHERE exam_id = $1 AND invigilator_id = $2`, [examPk, invId]);
-
-    // insert new assignment (created_at optional)
-    let insertRes;
-    try {
-      insertRes = await db.query(
-        `INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id, created_at) VALUES ($1,$2,$3,NOW()) RETURNING id`,
-        [examPk, roomId, invId]
-      );
-    } catch (insErr) {
-      // fallback if created_at not present
-      if (insErr && insErr.message && insErr.message.includes('created_at')) {
-        insertRes = await db.query(
-          `INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id) VALUES ($1,$2,$3) RETURNING id`,
-          [examPk, roomId, invId]
-        );
-      } else {
-        await db.query('ROLLBACK');
-        console.error('assign-room-smart insert error', insErr);
+      // insert safe (handle created_at absence)
+      try {
+        const insQ = `INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id, created_at) VALUES ($1,$2,$3,NOW()) RETURNING id`;
+        const ir = await db.query(insQ, [examPk, room_id, invigilator_id]);
+        return res.json({ status: 'ok', assignment_id: ir.rows[0].id });
+      } catch (insErr) {
+        if (insErr.message && insErr.message.includes('created_at')) {
+          const ir2 = await db.query(`INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id) VALUES ($1,$2,$3) RETURNING id`, [examPk, room_id, invigilator_id]);
+          return res.json({ status: 'ok', assignment_id: ir2.rows[0].id });
+        }
+        console.error('Manual assign insert error', insErr);
         return res.status(500).json({ error: 'Insert failed', detail: String(insErr) });
       }
+    } catch (err) {
+      console.error('POST /assign-room error', err && err.message);
+      return res.status(500).json({ error: 'Server error' });
     }
-
-    await db.query('COMMIT');
-
-    const newId = insertRes.rows[0] && insertRes.rows[0].id;
-    return res.json({ status: 'ok', assignment_id: newId, exam: examIdParam, room_id: roomId, invigilator_id: invId });
-  } catch (err) {
-    try { await db.query('ROLLBACK'); } catch (_) {}
-    console.error('assign-room-smart error', err && err.message);
-    return res.status(500).json({ error: 'Server error', detail: String(err) });
   }
-});
+);
 
-// seating route — kept as before
-router.post('/exams/:examId/generate-seating', async (req, res) => {
-  const examIdParam = req.params.examId;
-  try {
-    const examRow = await db.query('SELECT id, exam_id FROM exams WHERE exam_id = $1', [examIdParam]);
-    if (examRow.rowCount === 0) {
-      return res.status(404).json({ status: 'error', error: 'Exam not found' });
-    }
-    const examPk = examRow.rows[0].id;
-    const examCode = examRow.rows[0].exam_id;
+// POST /api/exams/:examId/assign-room-smart
+router.post(
+  '/exams/:examId/assign-room-smart',
+  authenticate,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    const examIdParam = req.params.examId;
+    const { room_id: roomId, invigilator_id: invId } = req.body || {};
 
-    if (!seatingService) {
-      return res.status(500).json({ status: 'error', error: 'Seating service missing' });
+    if (!roomId || !invId) {
+      return res.status(400).json({ error: 'Missing room_id or invigilator_id in request body' });
     }
 
-    let result;
-    if (typeof seatingService.generateSeatingByExamId === 'function') {
+    try {
+      // 1) find exam PK
+      const examRow = await db.query('SELECT id FROM exams WHERE exam_id = $1', [examIdParam]);
+      if (examRow.rowCount === 0) return res.status(404).json({ error: 'Exam not found' });
+      const examPk = examRow.rows[0].id;
+
+      // 2) verify invigilator exists
+      const invRow = await db.query('SELECT id FROM invigilators WHERE id = $1', [invId]);
+      if (invRow.rowCount === 0) return res.status(404).json({ error: 'Invigilator not found' });
+
+      // 3) verify room exists
+      const roomRow = await db.query('SELECT id FROM rooms WHERE id = $1', [roomId]);
+      if (roomRow.rowCount === 0) return res.status(404).json({ error: 'Room not found' });
+
+      // 4) detect assignment table name (defensive)
+      const assignTable = await detectAssignTable();
+
+      // 5) Transaction: delete old assignment for same exam+invigilator, then insert new
+      await db.query('BEGIN');
+
+      // delete any existing assignment for this invigilator on this exam (if present)
+      await db.query(`DELETE FROM ${assignTable} WHERE exam_id = $1 AND invigilator_id = $2`, [examPk, invId]);
+
+      // insert new assignment (created_at optional)
+      let insertRes;
       try {
-        result = await seatingService.generateSeatingByExamId(examPk);
-      } catch (errNumeric) {
-        try {
-          result = await seatingService.generateSeatingByExamId(examCode);
-        } catch (errString) {
-          console.error('Seating service failed for numeric then string:', errNumeric && errNumeric.message, '/', errString && errString.message);
-          return res.status(500).json({ status: 'error', error: String(errString || errNumeric) });
+        insertRes = await db.query(
+          `INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id, created_at) VALUES ($1,$2,$3,NOW()) RETURNING id`,
+          [examPk, roomId, invId]
+        );
+      } catch (insErr) {
+        // fallback if created_at not present
+        if (insErr && insErr.message && insErr.message.includes('created_at')) {
+          insertRes = await db.query(
+            `INSERT INTO ${assignTable} (exam_id, room_id, invigilator_id) VALUES ($1,$2,$3) RETURNING id`,
+            [examPk, roomId, invId]
+          );
+        } else {
+          await db.query('ROLLBACK');
+          console.error('assign-room-smart insert error', insErr);
+          return res.status(500).json({ error: 'Insert failed', detail: String(insErr) });
         }
       }
-    } else {
-      return res.status(500).json({ status: 'error', error: 'Seating service function generateSeatingByExamId not found' });
-    }
 
-    if (!result) {
-      return res.status(500).json({ status: 'error', error: 'Seating service returned no result' });
+      await db.query('COMMIT');
+
+      const newId = insertRes.rows[0] && insertRes.rows[0].id;
+      return res.json({ status: 'ok', assignment_id: newId, exam: examIdParam, room_id: roomId, invigilator_id: invId });
+    } catch (err) {
+      try { await db.query('ROLLBACK'); } catch (_) {}
+      console.error('assign-room-smart error', err && err.message);
+      return res.status(500).json({ error: 'Server error', detail: String(err) });
     }
-    return res.json(result);
-  } catch (err) {
-    console.error('POST /exams/:examId/generate-seating error', err && (err.stack || err.message || err));
-    return res.status(500).json({ status: 'error', error: String(err && (err.message || err)) });
   }
-});
+);
+
+// seating route — kept as before (protected admin)
+router.post(
+  '/exams/:examId/generate-seating',
+  authenticate,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    const examIdParam = req.params.examId;
+    try {
+      const examRow = await db.query('SELECT id, exam_id FROM exams WHERE exam_id = $1', [examIdParam]);
+      if (examRow.rowCount === 0) {
+        return res.status(404).json({ status: 'error', error: 'Exam not found' });
+      }
+      const examPk = examRow.rows[0].id;
+      const examCode = examRow.rows[0].exam_id;
+
+      if (!seatingService) {
+        return res.status(500).json({ status: 'error', error: 'Seating service missing' });
+      }
+
+      let result;
+      if (typeof seatingService.generateSeatingByExamId === 'function') {
+        try {
+          result = await seatingService.generateSeatingByExamId(examPk);
+        } catch (errNumeric) {
+          try {
+            result = await seatingService.generateSeatingByExamId(examCode);
+          } catch (errString) {
+            console.error('Seating service failed for numeric then string:', errNumeric && errNumeric.message, '/', errString && errString.message);
+            return res.status(500).json({ status: 'error', error: String(errString || errNumeric) });
+          }
+        }
+      } else {
+        return res.status(500).json({ status: 'error', error: 'Seating service function generateSeatingByExamId not found' });
+      }
+
+      if (!result) {
+        return res.status(500).json({ status: 'error', error: 'Seating service returned no result' });
+      }
+      return res.json(result);
+    } catch (err) {
+      console.error('POST /exams/:examId/generate-seating error', err && (err.stack || err.message || err));
+      return res.status(500).json({ status: 'error', error: String(err && (err.message || err)) });
+    }
+  }
+);
 
 module.exports = router;

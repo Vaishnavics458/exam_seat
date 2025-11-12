@@ -1,42 +1,33 @@
-﻿import React, { useEffect, useState } from "react";
+﻿// frontend/src/pages/AdminExamPreview.jsx
+import React, { useEffect, useState } from "react";
+import api, { downloadSeatingPdf, getAuthUser } from "../services/api";
 
-/**
- * AdminExamPreview.jsx (with Reassign feature)
- * - Renders exam preview + invigilation list (as before)
- * - Adds "Reassign" button for each invigilator to move them to a different room
- * - Calls API: prefer api.assignRoomSmart, fallback to api.assignRoom or POST /api/exams/:examId/assign-room
- */
-
-// import api helper (fallback to window.api)
-let api;
-try {
-  api = require("../services/api").default || require("../services/api");
-} catch (e) {
-  api = window.api || null;
-}
-
+/* AdminExamPreview with Reassign + PDF download per room */
 export default function AdminExamPreview({ examId = "E001_10AM" }) {
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState(null);
   const [invigilation, setInvigilation] = useState(null);
   const [error, setError] = useState(null);
 
-  // modal state for reassign
+  // modal state for reassign (unchanged)
   const [modalOpen, setModalOpen] = useState(false);
   const [modalData, setModalData] = useState({ invigilator: null, fromRoomId: null });
   const [selectedRoomId, setSelectedRoomId] = useState(null);
   const [modalBusy, setModalBusy] = useState(false);
   const [modalMessage, setModalMessage] = useState(null);
+  const [pdfBusyRoom, setPdfBusyRoom] = useState({}); // roomId -> bool
+
+  // api helper (use exported api object)
+  const apihost = api;
 
   async function loadData() {
     setError(null);
     setLoading(true);
     try {
-      const apihost = api || window.api;
       if (!apihost) throw new Error("API helper not available (check src/services/api.js or window.api)");
 
-      const pPromise = (apihost.getExamPreview || apihost.getExamPreview).call(apihost, examId);
-      const iPromise = (apihost.getInvigilation || apihost.getInvigilation).call(apihost, examId);
+      const pPromise = apihost.getExamPreview(examId);
+      const iPromise = apihost.getInvigilation(examId);
 
       const [pRes, iRes] = await Promise.allSettled([pPromise, iPromise]);
 
@@ -57,13 +48,11 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
 
   useEffect(() => { loadData(); /* eslint-disable-line */ }, [examId]);
 
-  // find list of rooms for modal dropdown (from preview)
   function getAllRooms() {
     if (!preview || !preview.rooms) return [];
     return preview.rooms.map(r => ({ id: r.room_id, name: r.room_name }));
   }
 
-  // open modal for reassign
   function openReassignModal(invigilator, fromRoomId) {
     setModalData({ invigilator, fromRoomId });
     setSelectedRoomId(null);
@@ -71,7 +60,6 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     setModalOpen(true);
   }
 
-  // close modal
   function closeModal() {
     if (modalBusy) return;
     setModalOpen(false);
@@ -80,7 +68,6 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     setModalMessage(null);
   }
 
-  // perform reassign API call
   async function doReassign() {
     if (!modalData.invigilator || !selectedRoomId) {
       setModalMessage({ type: "error", text: "Choose a target room" });
@@ -89,53 +76,14 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     setModalBusy(true);
     setModalMessage(null);
 
-    const apihost = api || window.api;
     try {
-      // prefer assignRoomSmart(examId, { room_id, invigilator_id })
-      if (typeof apihost.assignRoomSmart === "function") {
-        const res = await apihost.assignRoomSmart(examId, { room_id: selectedRoomId, invigilator_id: modalData.invigilator.invigilator_id });
-        // expected success shape: { status: 'ok' } or inserted assignment
-        if (res && (res.status === "ok" || res.success)) {
-          setModalMessage({ type: "success", text: "Reassigned successfully" });
-          await loadData();
-          setTimeout(closeModal, 500);
-        } else {
-          throw new Error(JSON.stringify(res || "unknown response"));
-        }
-      } else if (typeof apihost.assignRoom === "function") {
-        const res = await apihost.assignRoom(examId, { room_id: selectedRoomId, invigilator_id: modalData.invigilator.invigilator_id });
-        if (res && (res.status === "ok" || res.success)) {
-          setModalMessage({ type: "success", text: "Reassigned successfully" });
-          await loadData();
-          setTimeout(closeModal, 500);
-        } else throw new Error(JSON.stringify(res || "unknown response"));
-      } else if (typeof apihost.post === "function") {
-        // fallback to generic post wrapper: api.post('/exams/:examId/assign-room', body)
-        // some projects implement post(basePath, body)
-        try {
-          const path = `/exams/${encodeURIComponent(examId)}/assign-room`;
-          const res = await apihost.post(path, { room_id: selectedRoomId, invigilator_id: modalData.invigilator.invigilator_id });
-          if (res && (res.status === "ok" || res.success)) {
-            setModalMessage({ type: "success", text: "Reassigned successfully" });
-            await loadData();
-            setTimeout(closeModal, 500);
-          } else throw new Error(JSON.stringify(res || "unknown response"));
-        } catch (err) {
-          // try direct fetch as last resort
-          const r = await fetch(`/api/exams/${encodeURIComponent(examId)}/assign-room`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ room_id: selectedRoomId, invigilator_id: modalData.invigilator.invigilator_id })
-          });
-          const jr = await r.json();
-          if (r.ok && (jr.status === "ok" || jr.success)) {
-            setModalMessage({ type: "success", text: "Reassigned successfully" });
-            await loadData();
-            setTimeout(closeModal, 500);
-          } else throw new Error(JSON.stringify(jr || r.statusText));
-        }
+      const res = await apihost.assignRoomSmart(examId, { room_id: selectedRoomId, invigilator_id: modalData.invigilator.invigilator_id });
+      if (res && (res.status === "ok" || res.success)) {
+        setModalMessage({ type: "success", text: "Reassigned successfully" });
+        await loadData();
+        setTimeout(closeModal, 500);
       } else {
-        throw new Error("No assign API found (implement assignRoomSmart / assignRoom / post)");
+        throw new Error(JSON.stringify(res || "unknown response"));
       }
     } catch (err) {
       console.error("Reassign error", err);
@@ -145,7 +93,29 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     }
   }
 
-  // small helper to render a single room's seat grid
+  // download PDF for a room
+  async function doDownloadPdf(room) {
+    const roomId = room.room_id;
+    setPdfBusyRoom(prev => ({ ...prev, [roomId]: true }));
+    try {
+      const blob = await downloadSeatingPdf(examId, roomId);
+      const filename = `seating_${examId}_room_${room.room_name || roomId}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download PDF failed', err);
+      alert('Download failed: ' + (err && (err.message || JSON.stringify(err))));
+    } finally {
+      setPdfBusyRoom(prev => ({ ...prev, [roomId]: false }));
+    }
+  }
+
   function RoomGrid({ room }) {
     const rows = room.rows || 6;
     const cols = room.cols || 5;
@@ -156,12 +126,18 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
       <div className="bg-white rounded-md shadow-sm p-3">
         <div className="flex items-center justify-between mb-2">
           <h3 className="font-semibold text-slate-800">Room {room.room_name || room.room_id}</h3>
-          <div className="text-sm text-slate-500">{rows} × {cols}</div>
+          <div className="flex items-center gap-2">
+            <div className="text-sm text-slate-500 mr-2">{rows} × {cols}</div>
+            <button onClick={() => doDownloadPdf(room)}
+                    className="px-2 py-1 text-xs bg-green-600 text-white rounded"
+                    disabled={!!pdfBusyRoom[room.room_id]}>
+              {pdfBusyRoom[room.room_id] ? 'Downloading…' : 'Download PDF'}
+            </button>
+          </div>
         </div>
 
         <div className="overflow-auto">
-          <div className="grid gap-1"
-               style={{ gridTemplateColumns: `repeat(${cols}, minmax(48px, 1fr))` }}>
+          <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(48px, 1fr))` }}>
             {
               Array.from({ length: rows }).flatMap((_, rIdx) =>
                 Array.from({ length: cols }).map((__, cIdx) => {
@@ -190,7 +166,6 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     );
   }
 
-  // invigilators list with Reassign button
   function InvigList({ room }) {
     const rooms = invigilation && invigilation.rooms ? invigilation.rooms : [];
     const found = rooms.find(r => String(r.room_id) === String(room.room_id));
@@ -209,12 +184,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
                   <div className="text-xs text-slate-500">{inv.course || inv.info || '—'}</div>
                 </div>
                 <div className="flex flex-col items-end gap-2">
-                  <button
-                    className="px-2 py-1 rounded bg-orange-500 text-white text-xs"
-                    onClick={() => openReassignModal(inv, room.room_id)}
-                  >
-                    Reassign
-                  </button>
+                  <button className="px-2 py-1 rounded bg-orange-500 text-white text-xs" onClick={() => openReassignModal(inv, room.room_id)}>Reassign</button>
                 </div>
               </li>
             ))}
@@ -262,7 +232,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
         )}
       </main>
 
-      {/* Reassign Modal */}
+      {/* Reassign Modal (unchanged) */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-md p-4 w-full max-w-md">
@@ -273,22 +243,12 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
             </div>
 
             <label className="block text-sm mb-1">Target room</label>
-            <select
-              className="w-full mb-3 p-2 border rounded"
-              value={selectedRoomId || ""}
-              onChange={e => setSelectedRoomId(Number(e.target.value) || null)}
-            >
+            <select className="w-full mb-3 p-2 border rounded" value={selectedRoomId || ""} onChange={e => setSelectedRoomId(Number(e.target.value) || null)}>
               <option value="">-- choose room --</option>
-              {getAllRooms()
-                .filter(r => String(r.id) !== String(modalData.fromRoomId)) // don't show current
-                .map(r => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}
+              {getAllRooms().filter(r => String(r.id) !== String(modalData.fromRoomId)).map(r => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}
             </select>
 
-            {modalMessage && (
-              <div className={`mb-3 p-2 rounded ${modalMessage.type === 'error' ? 'bg-rose-50 text-rose-700' : 'bg-green-50 text-green-700'}`}>
-                {modalMessage.text}
-              </div>
-            )}
+            {modalMessage && (<div className={`mb-3 p-2 rounded ${modalMessage.type === 'error' ? 'bg-rose-50 text-rose-700' : 'bg-green-50 text-green-700'}`}>{modalMessage.text}</div>)}
 
             <div className="flex justify-end gap-2">
               <button className="px-3 py-1 rounded border" onClick={closeModal} disabled={modalBusy}>Cancel</button>

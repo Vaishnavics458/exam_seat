@@ -1,10 +1,7 @@
+// frontend/src/pages/InvigilatorDashboard.jsx
 import React, { useEffect, useState } from "react";
+import api, { getAuthUser } from "../services/api";
 
-/**
- * InvigilatorDashboard with dropdown selector populated from /api/invigilators
- * - Automatically loads duties when an invigilator is selected
- * - Shows name + id in the select for easy identification
- */
 export default function InvigilatorDashboard() {
   const [invigilators, setInvigilators] = useState([]);
   const [invigilatorId, setInvigilatorId] = useState("");
@@ -13,31 +10,50 @@ export default function InvigilatorDashboard() {
   const [loadingDuties, setLoadingDuties] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    loadInvigilators();
-  }, []);
-
-  async function loadInvigilators() {
+  // on mount: fetch invigilators and try to preselect the logged-in user
+// inside InvigilatorDashboard.jsx - replace useEffect / initial load logic with:
+useEffect(() => {
+  // If logged-in invigilator, auto-select them
+  async function init() {
     setLoadingInvs(true);
-    setError("");
     try {
-      const res = await fetch("/api/invigilators");
-      if (!res.ok) throw new Error(`Failed to load invigilators (${res.status})`);
-      const list = await res.json();
+      const listRes = await fetch("/api/invigilators");
+      const list = await listRes.json();
       setInvigilators(list || []);
-      // optionally pre-select first invigilator for convenience
+
+      let user = (typeof window !== 'undefined' && window.api && window.api.getAuthUser) ? window.api.getAuthUser() : null;
+      // try your local api.getAuthUser helper if exported
+      try {
+        const { getAuthUser } = require('../services/api');
+        const uu = getAuthUser();
+        if (uu) { user = uu; }
+      } catch (e) { /* ignore require in browser build */ }
+
+      if (user && user.role === 'invigilator') {
+        // try to match by id or name
+        const match = list.find(i => String(i.id) === String(user.id) || (i.name && i.name.toLowerCase() === (user.name || '').toLowerCase()));
+        if (match) {
+          setInvigilatorId(String(match.id));
+          await loadDuties(String(match.id));
+          return;
+        }
+      }
+
+      // fallback: preselect first invigilator (existing behaviour)
       if (list && list.length > 0) {
         setInvigilatorId(String(list[0].id));
-        // auto-load duties for the first item
         loadDuties(String(list[0].id));
       }
     } catch (err) {
-      console.error("loadInvigilators error", err);
+      console.error('loadInvigilators error', err);
       setError(String(err));
     } finally {
       setLoadingInvs(false);
     }
   }
+  init();
+}, []);
+
 
   async function loadDuties(id) {
     if (!id) {
@@ -48,12 +64,7 @@ export default function InvigilatorDashboard() {
     setError("");
     setDuties([]);
     try {
-      const res = await fetch(`/api/invigilators/${encodeURIComponent(id)}/duties`);
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Failed to load duties (${res.status}) - ${txt}`);
-      }
-      const payload = await res.json();
+      const payload = await api.getInvigilatorDuties(id);
       setDuties(payload.duties || []);
     } catch (err) {
       console.error("loadDuties error", err);
@@ -138,7 +149,6 @@ export default function InvigilatorDashboard() {
                   <th className="border px-3 py-2">Date</th>
                   <th className="border px-3 py-2">Time Slot</th>
                   <th className="border px-3 py-2">Room</th>
-                  <th className="border px-3 py-2">Seat Count</th>
                   <th className="border px-3 py-2">Notes</th>
                 </tr>
               </thead>
@@ -149,32 +159,11 @@ export default function InvigilatorDashboard() {
                     <td className="border px-3 py-2">{d.date || "-"}</td>
                     <td className="border px-3 py-2">{d.time_slot || "-"}</td>
                     <td className="border px-3 py-2">{d.room_name || d.room_id || "-"}</td>
-                    <td className="border px-3 py-2">{String(d.seat_count ?? "-")}</td>
                     <td className="border px-3 py-2">{d.special_instructions || "-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-
-          <div className="mt-4 flex gap-2">
-            <button
-              className="px-3 py-2 bg-sky-600 text-white rounded"
-              onClick={() => {
-                // quick print summary
-                const html = `
-                  <h1>Invigilator Duties</h1>
-                  <p>Invigilator ID: ${invigilatorId}</p>
-                  <pre>${duties.map(d => `${d.exam_id} • ${d.date} • ${d.time_slot} • ${d.room_name}`).join("\n")}</pre>
-                `;
-                const win = window.open("", "_blank");
-                win.document.write(html);
-                win.print();
-                win.close();
-              }}
-            >
-              Print Summary
-            </button>
           </div>
         </div>
       )}

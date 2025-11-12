@@ -1,36 +1,65 @@
-import React, { useState } from "react";
-import StudentDashboard from "./pages/StudentDashboard";
-import AdminExamPreview from "./pages/AdminExamPreview";
-import InvigilatorDashboard from "./pages/InvigilatorDashboard";
+// frontend/src/App.jsx
+import React, { Suspense, lazy } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from './components/ProtectedRoute';
+import Header from './components/Header';
+import api from './services/api';
 
-export default function App(){
-  const [mode, setMode] = useState('student'); // 'student' | 'admin' | 'invigilator'
-  const [adminExamToLoad, setAdminExamToLoad] = useState(null);
+// lazy-load existing pages (your existing files)
+const Login = lazy(() => import('./pages/Login'));
+const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
+const InvigilatorDashboard = lazy(() => import('./pages/InvigilatorDashboard'));
+const AdminExamPreview = lazy(() => import('./pages/AdminExamPreview'));
 
-  function openAdminPreview(examId) {
-    setAdminExamToLoad(examId);
-    setMode('admin');
-  }
-
+// Small wrapper to inject header only on protected routes
+function ProtectedLayout({ children }) {
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="max-w-6xl mx-auto mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-sky-800">ExamSeat Pro</h1>
-          <p className="text-sm text-slate-600">Student lookup & admin preview</p>
-        </div>
-        <div className="space-x-2">
-          <button className={`px-3 py-2 rounded ${mode==='student'? 'bg-sky-600 text-white': 'bg-white border'}`} onClick={()=>setMode('student')}>Student</button>
-          <button className={`px-3 py-2 rounded ${mode==='admin'? 'bg-sky-600 text-white': 'bg-white border'}`} onClick={()=>setMode('admin')}>Admin Preview</button>
-          <button className={`px-3 py-2 rounded ${mode==='invigilator'? 'bg-sky-600 text-white': 'bg-white border'}`} onClick={()=>setMode('invigilator')}>Invigilator</button>
-        </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto">
-        {mode === 'student' && <StudentDashboard />}
-        {mode === 'admin' && <AdminExamPreview key={adminExamToLoad || 'default'} />}
-        {mode === 'invigilator' && <InvigilatorDashboard onOpenAdminPreview={openAdminPreview} />}
+    <div className="min-h-screen bg-slate-50">
+      <Header />
+      <main className="max-w-6xl mx-auto p-6">
+        {children}
       </main>
     </div>
-  )
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading…</div>}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/login" replace />} />
+
+          <Route path="/login" element={<Login />} />
+
+          <Route path="/student" element={
+            <ProtectedRoute allowedRoles={['student']}>
+              <ProtectedLayout>
+                <StudentDashboard />
+              </ProtectedLayout>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/invigilator" element={
+            <ProtectedRoute allowedRoles={['invigilator']}>
+              <ProtectedLayout>
+                <InvigilatorDashboard />
+              </ProtectedLayout>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/admin" element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <ProtectedLayout>
+                <AdminExamPreview />
+              </ProtectedLayout>
+            </ProtectedRoute>
+          } />
+
+          {/* Fallback */}
+          <Route path="*" element={<div className="p-6">Page not found — <a href="/login" className="text-sky-600">Go to login</a></div>} />
+        </Routes>
+      </Suspense>
+    </BrowserRouter>
+  );
 }
