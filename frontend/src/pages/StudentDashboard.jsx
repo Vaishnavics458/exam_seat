@@ -46,11 +46,8 @@ export default function StudentDashboard() {
 
   return (
     <div className="bg-white p-6 rounded shadow max-w-3xl mx-auto">
-      <div className="mb-4">
-        <h2 className="text-xl font-semibold">Student Dashboard</h2>
-        <div className="text-sm text-slate-500">
-          {user ? `Signed in as: ${user.name || user.roll_number || user.email} (${user.role})` : 'Not signed in'}
-        </div>
+       <div className="mb-4">
+        
       </div>
       {/* Header with signed-in info + logout */}
 <div className="flex items-center justify-between mb-4">

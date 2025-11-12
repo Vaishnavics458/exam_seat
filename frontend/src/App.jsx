@@ -10,7 +10,8 @@ import AdminStudents from './pages/admin/AdminStudents';
 import ProtectedRoute from './components/ProtectedRoute';
 import api from './services/api';
 import AdminInvigilators from './pages/admin/AdminInvigilators';
-
+import AdminRooms from './pages/admin/AdminRooms';
+import AdminExams from './pages/admin/AdminExams';
 
 export default function App(){
   // If you want login to auto-open as first page, ensure / route redirects to /login
@@ -45,9 +46,8 @@ export default function App(){
   <Route index element={<Navigate to="students" replace />} />
   <Route path="students" element={<AdminStudents />} />
   <Route path="invigilators" element={<AdminInvigilators />} />
-  <Route path="rooms" element={<div className="p-4">Rooms (coming)</div>} />
-  <Route path="exams" element={<div className="p-4">Exams (coming)</div>} />
-
+  <Route path="rooms" element={<AdminRooms />} />
+  <Route path="exams" element={<AdminExams />} />
   {/* Admin Exam Preview (per-exam + shortcut preview) */}
   {/* URL: /admin/preview  OR /admin/exams/:examId/preview */}
   <Route path="preview" element={<AdminExamPreview />} />

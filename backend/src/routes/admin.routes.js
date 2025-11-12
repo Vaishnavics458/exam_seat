@@ -195,7 +195,7 @@ router.delete('/rooms/:id', authenticate, authorizeRoles('admin'), async (req, r
 });
 
 // ------------------ Exams CRUD ------------------
-router.get('/exams/list', authenticate, authorizeRoles('admin'), async (req, res) => {
+router.get('/exams', authenticate, authorizeRoles('admin'), async (req, res) => {
   try {
     const r = await db.query('SELECT id, exam_id, date, time_slot, course_codes, total_students, created_at FROM exams ORDER BY date, exam_id');
     res.json(r.rows);

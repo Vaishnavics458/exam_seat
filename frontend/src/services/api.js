@@ -172,7 +172,10 @@ export const updateAdminInvigilator = (id, body) => put(`/admin/invigilators/${e
 export const deleteAdminInvigilator = (id) => del(`/admin/invigilators/${encodeURIComponent(id)}`);
 
 // Rooms / exams admin (examples)
-export const getAdminRooms = () => get('/admin/rooms');
+export const getAdminRooms = () => get('/admin/rooms/list');
+export const createAdminRoom = (body) => post('/admin/rooms', body);
+export const updateAdminRoom = (id, body) => put(`/admin/rooms/${encodeURIComponent(id)}`, body);
+export const deleteAdminRoom = (id) => del(`/admin/rooms/${encodeURIComponent(id)}`);
 export const getAdminExams = () => get('/admin/exams');
 
 /* Bulk upload (students) */
@@ -224,7 +227,7 @@ const exported = {
   // admin
   getAdminStudents, createAdminStudent, updateAdminStudent, deleteAdminStudent,
   getAdminInvigilators, createAdminInvigilator, updateAdminInvigilator, deleteAdminInvigilator,
-  getAdminRooms, getAdminExams, bulkUploadStudents, downloadSeatingPdf
+  getAdminRooms, createAdminRoom, updateAdminRoom, deleteAdminRoom, getAdminExams, bulkUploadStudents, downloadSeatingPdf
 };
 
 export default exported;

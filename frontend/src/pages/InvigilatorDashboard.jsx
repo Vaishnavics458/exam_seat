@@ -79,9 +79,7 @@ useEffect(() => {
 
   return (
     <div className="max-w-5xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold text-sky-800 mb-4">
-        Invigilator Duty Dashboard
-      </h1>
+      
       {/* Header with role + logout */}
 <div className="flex items-center justify-between mb-4">
   <div>
