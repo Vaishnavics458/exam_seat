@@ -14,6 +14,9 @@ const { parseSeatId } = require('../utils/seat-utils');
 
 router.use('/auth', authRoutes);
 router.use('/admin', adminRoutes);
+// near top where other router modules are mounted:
+router.use('/admin', require('./admin.routes'));
+
 
 /* GET /api/exams - list exams */
 router.get('/exams', async function (req, res) {

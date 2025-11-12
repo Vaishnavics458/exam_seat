@@ -9,6 +9,8 @@ import AdminLayout from './pages/admin/AdminLayout';
 import AdminStudents from './pages/admin/AdminStudents';
 import ProtectedRoute from './components/ProtectedRoute';
 import api from './services/api';
+import AdminInvigilators from './pages/admin/AdminInvigilators';
+
 
 export default function App(){
   // If you want login to auto-open as first page, ensure / route redirects to /login
@@ -42,7 +44,7 @@ export default function App(){
 }>
   <Route index element={<Navigate to="students" replace />} />
   <Route path="students" element={<AdminStudents />} />
-  <Route path="invigilators" element={<div className="p-4">Invigilators (coming)</div>} />
+  <Route path="invigilators" element={<AdminInvigilators />} />
   <Route path="rooms" element={<div className="p-4">Rooms (coming)</div>} />
   <Route path="exams" element={<div className="p-4">Exams (coming)</div>} />
 
