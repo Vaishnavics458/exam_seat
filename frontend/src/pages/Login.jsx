@@ -30,27 +30,75 @@ export default function Login() {
       }
 
       const res = await api.login(body);
-      // res expected { token, user? }
-      if (res && res.token) {
-        // optionally obtain user object from API (getMe) - but api.login may return user
-        let user = res.user || null;
-        try {
-          if (!user && api.getMe) {
-            const me = await api.getMe().catch(()=>null);
-            if (me) user = me.user || me;
-          }
-        } catch (err) { /* ignore */ }
+      // res expected { token, user? } (or may be handled by your API wrapper)
 
-        api.setAuthToken && api.setAuthToken(res.token, user);
-
-        // redirect by role
-        const target = (user && user.role) ? user.role : role;
-        if (target === 'admin') navigate('/admin', { replace: true });
-        else if (target === 'invigilator') navigate('/invigilator', { replace: true });
-        else navigate('/student', { replace: true });
-      } else {
-        setError('Login failed: unexpected response');
+      // Normalize token & user
+      let token = null;
+      let user = null;
+      if (!res) {
+        throw new Error('Empty login response');
       }
+
+      if (typeof res === 'string') {
+        // some wrappers return raw string token
+        token = res;
+      } else if (res.token) {
+        token = res.token;
+        user = res.user || null;
+      } else if (res.accessToken) {
+        token = res.accessToken;
+        user = res.user || null;
+      } else if (res.data && res.data.token) {
+        token = res.data.token;
+        user = res.data.user || null;
+      } else {
+        // last-ditch: if the payload has role or identifying info, keep it
+        if (res.role || res.name || res.email || res.roll_number) {
+          user = {
+            role: res.role || role,
+            name: res.name || null,
+            email: res.email || null,
+            roll_number: res.roll_number || null,
+            invigilator_id: res.invigilator_id || null
+          };
+        }
+      }
+
+      if (!token) {
+        throw new Error('Login did not return a token');
+      }
+
+      // If user not present, try to fetch /auth/me
+      if (!user && typeof api.getMe === 'function') {
+        try {
+          const me = await api.getMe().catch(() => null);
+          if (me) {
+            // me may be { user: {...} } or the user object directly
+            user = me.user || me;
+          }
+        } catch (ignore) {
+          // ignore if getMe fails
+        }
+      }
+
+      // Fallback: infer minimal user object
+      if (!user) user = { role };
+
+      // Persist token + user
+      if (typeof api.setAuthToken === 'function') {
+        api.setAuthToken(token, user);
+      } else {
+        // fallback: store manually
+        try { localStorage.setItem('examseat_token', token); } catch (_) {}
+        try { localStorage.setItem('examseat_user', JSON.stringify(user)); } catch (_) {}
+      }
+
+      // Redirect based on resolved role
+      const finalRole = (user && user.role) ? user.role : role;
+      if (finalRole === 'admin') navigate('/admin', { replace: true });
+      else if (finalRole === 'invigilator') navigate('/invigilator', { replace: true });
+      else navigate('/student', { replace: true });
+
     } catch (err) {
       setError(err && (err.error || err.message || JSON.stringify(err)) || 'Login error');
     } finally {

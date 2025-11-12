@@ -1,255 +1,316 @@
-// frontend/src/pages/AdminStudents.jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   getAdminStudents,
   createAdminStudent,
   updateAdminStudent,
   deleteAdminStudent,
-  downloadSeatingPdf
+  bulkUploadStudents
 } from '../services/api';
-import CSVUploader from '../components/CSVUploader';
-
-function StudentRow({ s, onEdit, onDelete }) {
-  return (
-    <tr className="hover:bg-slate-50">
-      <td className="border px-3 py-2 text-sm">{s.id}</td>
-      <td className="border px-3 py-2 text-sm">{s.student_id || '-'}</td>
-      <td className="border px-3 py-2 text-sm">{s.roll_number || '-'}</td>
-      <td className="border px-3 py-2 text-sm">{s.name || '-'}</td>
-      <td className="border px-3 py-2 text-sm">{s.course_code || '-'}</td>
-      <td className="border px-3 py-2 text-sm">{s.branch || '-'}</td>
-      <td className="border px-3 py-2 text-sm">{s.semester || '-'}</td>
-      <td className="border px-3 py-2 text-right">
-        <div className="flex gap-2 justify-end">
-          <button className="px-2 py-1 text-xs border rounded" onClick={() => onEdit(s)}>Edit</button>
-          <button className="px-2 py-1 text-xs bg-rose-600 text-white rounded" onClick={() => onDelete(s)}>Delete</button>
-        </div>
-      </td>
-    </tr>
-  );
-}
+import api from '../services/api';
+import { saveAs } from 'file-saver'; // optional if you want to save files (not required here)
 
 export default function AdminStudents() {
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ student_id: '', roll_number: '', name: '', course_code: '', branch: '', semester: '' });
+  // add/edit modal state
+  const [modalOpen, setModalOpen] = useState(false);
   const [modalBusy, setModalBusy] = useState(false);
+  const [editing, setEditing] = useState(null); // null => add, otherwise student object
+  const [form, setForm] = useState({
+    student_id: '',
+    roll_number: '',
+    name: '',
+    course: '',
+    branch: '',
+    semester: ''
+  });
 
-  async function load() {
+  // Bulk upload state
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState(null);
+  const fileInputRef = useRef(null);
+
+  async function loadStudents() {
     setLoading(true);
     setError(null);
     try {
-      const list = await getAdminStudents();
-      setStudents(list || []);
+      const res = await getAdminStudents();
+      // res expected to be an array of students
+      setStudents(Array.isArray(res) ? res : (res.rows || []));
     } catch (err) {
-      console.error('load students', err);
-      setError(err && (err.message || String(err)));
+      console.error('loadStudents error', err);
+      setError(err && (err.message || (err.payload && err.payload.error)) || 'Failed to load students');
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    loadStudents();
+    // eslint-disable-next-line
+  }, []);
 
-  function openNew() {
-    setEditing({ _new: true });
-    setForm({ student_id: '', roll_number: '', name: '', course_code: '', branch: '', semester: '' });
+  function openAddModal() {
+    setEditing(null);
+    setForm({ student_id: '', roll_number: '', name: '', course: '', branch: '', semester: '' });
+    setModalOpen(true);
   }
 
-  function openEdit(student) {
+  function openEditModal(student) {
     setEditing(student);
     setForm({
-      student_id: student.student_id || '',
+      student_id: student.student_id || student.id || '',
       roll_number: student.roll_number || '',
       name: student.name || '',
-      course_code: student.course_code || '',
+      course: student.course || '',
       branch: student.branch || '',
       semester: student.semester || ''
     });
+    setModalOpen(true);
   }
 
   function closeModal() {
+    if (modalBusy) return;
+    setModalOpen(false);
     setEditing(null);
-    setForm({ student_id: '', roll_number: '', name: '', course_code: '', branch: '', semester: '' });
+    setForm({ student_id: '', roll_number: '', name: '', course: '', branch: '', semester: '' });
   }
 
   async function submitForm(e) {
-    e?.preventDefault();
+    e && e.preventDefault();
     setModalBusy(true);
     try {
-      if (editing && editing._new) {
-        await createAdminStudent(form);
-      } else if (editing && editing.id) {
-        await updateAdminStudent(editing.id, form);
+      if (editing) {
+        // update
+        await updateAdminStudent(editing.id || editing.student_id, {
+          student_id: form.student_id,
+          roll_number: form.roll_number,
+          name: form.name,
+          course: form.course,
+          branch: form.branch,
+          semester: form.semester
+        });
+      } else {
+        // create
+        await createAdminStudent({
+          student_id: form.student_id,
+          roll_number: form.roll_number,
+          name: form.name,
+          course: form.course,
+          branch: form.branch,
+          semester: form.semester
+        });
       }
-      await load();
+      await loadStudents();
       closeModal();
     } catch (err) {
-      console.error('save error', err);
-      setError(err && (err.message || String(err)));
+      console.error('save student failed', err);
+      alert('Save failed: ' + (err && (err.message || JSON.stringify(err))));
     } finally {
       setModalBusy(false);
     }
   }
 
   async function handleDelete(student) {
-    if (!confirm(`Delete student ${student.name || student.roll_number || student.id}? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete student ${student.name || student.roll_number}?`)) return;
     try {
-      await deleteAdminStudent(student.id);
-      await load();
+      await deleteAdminStudent(student.id || student.student_id);
+      await loadStudents();
     } catch (err) {
       console.error('delete failed', err);
-      setError(err && (err.message || String(err)));
+      alert('Delete failed: ' + (err && (err.message || JSON.stringify(err))));
     }
   }
 
-  async function onCsvDone() {
-    await load();
+  // Bulk upload helpers
+  function onBulkFileChange(e) {
+    const f = e && e.target && e.target.files && e.target.files[0];
+    setBulkFile(f || null);
+    setBulkMessage(null);
+  }
+
+  async function uploadBulkFile() {
+    if (!bulkFile) {
+      setBulkMessage({ type: 'error', text: 'Choose a CSV/Excel file first' });
+      return;
+    }
+    setBulkBusy(true);
+    setBulkMessage(null);
+    try {
+      const res = await bulkUploadStudents(bulkFile);
+      // res expected e.g. { status:'ok', imported: N, errors: [...] } or message
+      const text = (res && (res.message || (res.imported ? `${res.imported} imported` : JSON.stringify(res)))) || 'Upload succeeded';
+      setBulkMessage({ type: 'success', text });
+      // refresh students list
+      await loadStudents();
+      // clear file input visually
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setBulkFile(null);
+    } catch (err) {
+      console.error('bulk upload failed', err);
+      const msg = err && (err.payload && err.payload.error) ? err.payload.error : (err.message || String(err));
+      setBulkMessage({ type: 'error', text: `Upload failed: ${msg}` });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function clearBulkSelection() {
+    setBulkFile(null);
+    setBulkMessage(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-4">
+    <div className="min-h-screen p-6 bg-slate-50">
+      <header className="max-w-6xl mx-auto mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-sky-800">Admin — Students</h1>
-          <p className="text-sm text-slate-600">List, add, edit, delete students. Bulk upload CSV below.</p>
+          <h1 className="text-2xl font-semibold text-sky-800">Admin — Control Panel</h1>
+          <p className="text-sm text-slate-600">Manage students, invigilators, rooms & exams</p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="px-3 py-2 bg-sky-600 text-white rounded" onClick={openNew}>Add student</button>
-          <button className="px-3 py-2 border rounded" onClick={load}>Refresh</button>
+          <div className="text-sm text-slate-600">Signed in as: admin</div>
+          <button className="px-3 py-1 border rounded" onClick={loadStudents}>Refresh</button>
+          <button className="px-3 py-1 rounded bg-sky-600 text-white" onClick={openAddModal}>Add student</button>
         </div>
-      </div>
+      </header>
 
-      {error && <div className="mb-4 p-3 bg-rose-50 text-rose-700 border rounded">{error}</div>}
+      <main className="max-w-6xl mx-auto grid grid-cols-4 gap-6">
+        <nav className="col-span-1 bg-white p-4 rounded-md shadow-sm">
+          <ul className="space-y-2 text-sm">
+            <li className="font-medium">Students</li>
+            <li className="text-slate-600">Invigilators</li>
+            <li className="text-slate-600">Rooms</li>
+            <li className="text-slate-600">Exams</li>
+          </ul>
+        </nav>
 
-      <div className="bg-white border rounded overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-100 text-left">
-              <th className="border px-3 py-2">#</th>
-              <th className="border px-3 py-2">Student ID</th>
-              <th className="border px-3 py-2">Roll</th>
-              <th className="border px-3 py-2">Name</th>
-              <th className="border px-3 py-2">Course</th>
-              <th className="border px-3 py-2">Branch</th>
-              <th className="border px-3 py-2">Sem</th>
-              <th className="border px-3 py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan="8" className="p-4 text-slate-500">Loading…</td></tr>
-            ) : students.length === 0 ? (
-              <tr><td colSpan="8" className="p-4 text-slate-500">No students found</td></tr>
-            ) : students.map(s => (
-              <StudentRow key={s.id} s={s} onEdit={openEdit} onDelete={handleDelete} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+        <section className="col-span-3">
+          <div className="bg-white rounded-md shadow-sm p-4">
+            <h2 className="text-lg font-semibold mb-3">Students</h2>
 
-      <div className="mt-6 grid md:grid-cols-2 gap-6">
-        <div>
-          <h3 className="font-semibold mb-2">Bulk CSV Upload</h3>
-          <CSVUploader onDone={onCsvDone} />
-        </div>
+            {error && <div className="mb-3 p-2 bg-rose-50 text-rose-700 rounded">{error}</div>}
 
-        <div>
-          <h3 className="font-semibold mb-2">Quick actions</h3>
-          <div className="bg-white p-3 border rounded space-y-2">
-            <p className="text-sm text-slate-600">Download seating PDF for an exam room:</p>
-            <DownloadPdfBox />
+            <div className="overflow-auto border rounded">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50">
+                    <th className="p-3 text-left">#</th>
+                    <th className="p-3 text-left">Student ID</th>
+                    <th className="p-3 text-left">Roll</th>
+                    <th className="p-3 text-left">Name</th>
+                    <th className="p-3 text-left">Course</th>
+                    <th className="p-3 text-left">Branch</th>
+                    <th className="p-3 text-left">Semester</th>
+                    <th className="p-3 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr><td colSpan="8" className="p-8 text-center text-slate-500">Loading…</td></tr>
+                  ) : (students && students.length > 0) ? (
+                    students.map((s, idx) => (
+                      <tr key={s.id || s.student_id} className="border-t">
+                        <td className="p-3">{idx + 1}</td>
+                        <td className="p-3">{s.student_id || s.id}</td>
+                        <td className="p-3">{s.roll_number}</td>
+                        <td className="p-3">{s.name}</td>
+                        <td className="p-3">{s.course}</td>
+                        <td className="p-3">{s.branch}</td>
+                        <td className="p-3">{s.semester}</td>
+                        <td className="p-3">
+                          <div className="flex gap-2">
+                            <button className="px-2 py-1 border rounded text-xs" onClick={() => openEditModal(s)}>Edit</button>
+                            <button className="px-2 py-1 border rounded text-xs" onClick={() => handleDelete(s)}>Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr><td colSpan="8" className="p-8 text-center text-slate-500">No students found</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bulk CSV Upload UI */}
+            <div className="mt-6 bg-slate-50 rounded p-4 border">
+              <h3 className="font-semibold mb-2">Bulk CSV Upload</h3>
+              <p className="text-sm text-slate-500 mb-3">Expected CSV columns (case-insensitive): Student_ID, Roll_Number, Name, Course_Code, Branch, Semester</p>
+
+              <div className="flex items-center gap-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={onBulkFileChange}
+                  className="block"
+                />
+                <button
+                  className="px-3 py-2 bg-sky-600 text-white rounded"
+                  onClick={uploadBulkFile}
+                  disabled={bulkBusy}
+                >
+                  {bulkBusy ? 'Uploading…' : 'Upload CSV'}
+                </button>
+
+                <button className="px-3 py-2 border rounded" onClick={clearBulkSelection} disabled={bulkBusy}>
+                  Clear
+                </button>
+
+                {bulkFile && <div className="text-sm text-slate-600 ml-3">Selected: <span className="font-medium">{bulkFile.name}</span></div>}
+              </div>
+
+              {bulkMessage && (
+                <div className={`mt-3 p-2 rounded ${bulkMessage.type === 'error' ? 'bg-rose-50 text-rose-700' : 'bg-green-50 text-green-700'}`}>
+                  {bulkMessage.text}
+                </div>
+              )}
+            </div>
+
           </div>
-        </div>
-      </div>
+        </section>
+      </main>
 
-      {/* Modal */}
-      {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-md w-full max-w-xl p-4">
-            <h3 className="font-semibold mb-2">{editing._new ? 'Add student' : `Edit student ${editing.name || editing.id}`}</h3>
-            <form onSubmit={submitForm} className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-slate-600">Student ID</label>
-                <input className="w-full border rounded p-2" value={form.student_id} onChange={e=>setForm({...form, student_id: e.target.value})} />
-              </div>
-              <div>
-                <label className="text-xs text-slate-600">Roll number</label>
-                <input className="w-full border rounded p-2" value={form.roll_number} onChange={e=>setForm({...form, roll_number: e.target.value})} />
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-xs text-slate-600">Name</label>
-                <input className="w-full border rounded p-2" value={form.name} onChange={e=>setForm({...form, name: e.target.value})} />
-              </div>
-              <div>
-                <label className="text-xs text-slate-600">Course code</label>
-                <input className="w-full border rounded p-2" value={form.course_code} onChange={e=>setForm({...form, course_code: e.target.value})} />
-              </div>
-              <div>
-                <label className="text-xs text-slate-600">Branch</label>
-                <input className="w-full border rounded p-2" value={form.branch} onChange={e=>setForm({...form, branch: e.target.value})} />
-              </div>
-              <div>
-                <label className="text-xs text-slate-600">Semester</label>
-                <input className="w-full border rounded p-2" value={form.semester} onChange={e=>setForm({...form, semester: e.target.value})} />
-              </div>
+      {/* Add/Edit modal */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-md p-6 w-full max-w-md shadow-lg">
+            <h3 className="text-lg font-semibold mb-3">{editing ? 'Edit student' : 'Add student'}</h3>
+            <form onSubmit={submitForm}>
+              <label className="text-xs text-slate-600">Student ID</label>
+              <input className="w-full p-2 border rounded mb-2" value={form.student_id} onChange={e => setForm({...form, student_id: e.target.value})} />
 
-              <div className="md:col-span-2 flex justify-end gap-2 mt-2">
-                <button type="button" className="px-3 py-1 border rounded" onClick={closeModal} disabled={modalBusy}>Cancel</button>
-                <button type="submit" className="px-3 py-1 bg-sky-600 text-white rounded" disabled={modalBusy}>{modalBusy ? 'Saving…' : 'Save'}</button>
+              <label className="text-xs text-slate-600">Roll number</label>
+              <input className="w-full p-2 border rounded mb-2" value={form.roll_number} onChange={e => setForm({...form, roll_number: e.target.value})} />
+
+              <label className="text-xs text-slate-600">Name</label>
+              <input className="w-full p-2 border rounded mb-2" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+
+              <label className="text-xs text-slate-600">Course</label>
+              <input className="w-full p-2 border rounded mb-2" value={form.course} onChange={e => setForm({...form, course: e.target.value})} />
+
+              <label className="text-xs text-slate-600">Branch</label>
+              <input className="w-full p-2 border rounded mb-2" value={form.branch} onChange={e => setForm({...form, branch: e.target.value})} />
+
+              <label className="text-xs text-slate-600">Semester</label>
+              <input className="w-full p-2 border rounded mb-4" value={form.semester} onChange={e => setForm({...form, semester: e.target.value})} />
+
+              <div className="flex justify-end gap-2">
+                <button type="button" className="px-3 py-2 border rounded" onClick={closeModal} disabled={modalBusy}>Cancel</button>
+                <button type="submit" className="px-3 py-2 rounded bg-sky-600 text-white" disabled={modalBusy}>
+                  {modalBusy ? 'Saving…' : 'Save'}
+                </button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// DownloadPdfBox component (inside same file)
-function DownloadPdfBox() {
-  const [examId, setExamId] = useState('');
-  const [roomId, setRoomId] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null);
-
-  async function doDownload() {
-    if (!examId || !roomId) return setMsg({ type: 'error', text: 'Exam ID and Room ID required' });
-    setMsg(null);
-    setBusy(true);
-    try {
-      const blob = await downloadSeatingPdf(examId, roomId);
-      const filename = `seating_${examId}_room_${roomId}.pdf`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setMsg({ type: 'success', text: 'Downloaded' });
-    } catch (err) {
-      console.error('download pdf', err);
-      setMsg({ type: 'error', text: err && (err.message || String(err)) });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div>
-      <div className="grid grid-cols-2 gap-2 mb-2">
-        <input className="border rounded p-2" placeholder="Exam ID (e.g. E001_10AM)" value={examId} onChange={e=>setExamId(e.target.value)} />
-        <input className="border rounded p-2" placeholder="Room ID (numeric)" value={roomId} onChange={e=>setRoomId(e.target.value)} />
-      </div>
-      <div className="flex gap-2">
-        <button className="px-3 py-1 bg-sky-600 text-white rounded" onClick={doDownload} disabled={busy}>{busy ? 'Downloading…' : 'Download PDF'}</button>
-      </div>
-      {msg && <div className={`mt-3 p-2 rounded ${msg.type === 'error' ? 'bg-rose-50 text-rose-700' : 'bg-green-50 text-green-700'}`}>{msg.text}</div>}
     </div>
   );
 }

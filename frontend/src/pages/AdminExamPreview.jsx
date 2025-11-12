@@ -1,34 +1,50 @@
 ﻿// frontend/src/pages/AdminExamPreview.jsx
 import React, { useEffect, useState } from "react";
-import api, { downloadSeatingPdf, getAuthUser } from "../services/api";
+import api from "../services/api";
+// pdf-lib used to merge/compose PDFs client-side
+import { PDFDocument } from 'pdf-lib';
 
-/* AdminExamPreview with Reassign + PDF download per room */
+/**
+ * AdminExamPreview.jsx
+ *
+ * Keep behaviour of reassign unchanged.
+ * Adds:
+ * - Bulk CSV upload UI + handler (calls api.bulkUploadStudents)
+ * - Download PDF per-room (uses api.downloadSeatingPdf)
+ * - "Open Full Room" modal which shows full seating grid + invigilators
+ *
+ * NOTE: This file intentionally uses only the default `api` export
+ * (to avoid duplicate import names). Call functions as api.foo(...)
+ */
+
 export default function AdminExamPreview({ examId = "E001_10AM" }) {
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState(null);
   const [invigilation, setInvigilation] = useState(null);
   const [error, setError] = useState(null);
 
-  // modal state for reassign (unchanged)
+  // bulk upload
+  const [bulkFile, setBulkFile] = useState(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+
+  // modal state for reassign (existing behaviour)
   const [modalOpen, setModalOpen] = useState(false);
   const [modalData, setModalData] = useState({ invigilator: null, fromRoomId: null });
   const [selectedRoomId, setSelectedRoomId] = useState(null);
   const [modalBusy, setModalBusy] = useState(false);
   const [modalMessage, setModalMessage] = useState(null);
   const [pdfBusyRoom, setPdfBusyRoom] = useState({}); // roomId -> bool
-
-  // api helper (use exported api object)
-  const apihost = api;
+  const [mergeBusy, setMergeBusy] = useState(false);
+  // full room modal
+  const [fullRoomOpen, setFullRoomOpen] = useState(false);
+  const [fullRoomData, setFullRoomData] = useState(null);
 
   async function loadData() {
     setError(null);
     setLoading(true);
     try {
-      if (!apihost) throw new Error("API helper not available (check src/services/api.js or window.api)");
-
-      const pPromise = apihost.getExamPreview(examId);
-      const iPromise = apihost.getInvigilation(examId);
-
+      const pPromise = api.getExamPreview(examId);
+      const iPromise = api.getInvigilation(examId);
       const [pRes, iRes] = await Promise.allSettled([pPromise, iPromise]);
 
       if (pRes.status === "rejected") throw new Error("Preview fetch failed: " + (pRes.reason && pRes.reason.message));
@@ -77,7 +93,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     setModalMessage(null);
 
     try {
-      const res = await apihost.assignRoomSmart(examId, { room_id: selectedRoomId, invigilator_id: modalData.invigilator.invigilator_id });
+      const res = await api.assignRoomSmart(examId, { room_id: selectedRoomId, invigilator_id: modalData.invigilator.invigilator_id });
       if (res && (res.status === "ok" || res.success)) {
         setModalMessage({ type: "success", text: "Reassigned successfully" });
         await loadData();
@@ -98,7 +114,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     const roomId = room.room_id;
     setPdfBusyRoom(prev => ({ ...prev, [roomId]: true }));
     try {
-      const blob = await downloadSeatingPdf(examId, roomId);
+      const blob = await api.downloadSeatingPdf(examId, roomId);
       const filename = `seating_${examId}_room_${room.room_name || roomId}.pdf`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -116,6 +132,99 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     }
   }
 
+    // Merge all room PDFs into a single PDF and download
+  async function downloadAllRoomsPdf() {
+    if (!preview || !preview.rooms || preview.rooms.length === 0) {
+      alert('No rooms to download');
+      return;
+    }
+
+    setMergeBusy(true);
+    try {
+      // fetch all room PDFs in parallel (but keep concurrency reasonable)
+      const rooms = preview.rooms || [];
+      // Map to promises of Blob
+      const fetchPromises = rooms.map(async (room) => {
+        try {
+          const blob = await api.downloadSeatingPdf(examId, room.room_id);
+          return { room, blob };
+        } catch (err) {
+          console.warn('Failed to fetch room pdf', room.room_id, err);
+          return { room, blob: null, error: err };
+        }
+      });
+
+      const results = await Promise.all(fetchPromises);
+
+      // filter successful
+      const successful = results.filter(r => r.blob);
+      if (successful.length === 0) {
+        throw new Error('No room PDFs could be retrieved.');
+      }
+
+      // Create a new pdf-lib document and copy pages from each fetched PDF
+      const mergedPdf = await PDFDocument.create();
+
+      for (const item of successful) {
+        const arrayBuffer = await item.blob.arrayBuffer();
+        const donorPdf = await PDFDocument.load(arrayBuffer);
+        const donorPages = await mergedPdf.copyPages(donorPdf, donorPdf.getPageIndices());
+        donorPages.forEach(p => mergedPdf.addPage(p));
+      }
+
+      const mergedBytes = await mergedPdf.save();
+      const mergedBlob = new Blob([mergedBytes], { type: 'application/pdf' });
+      const filename = `seating_${examId}_all_rooms_merged.pdf`;
+      const url = URL.createObjectURL(mergedBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error('Merge all PDFs failed', err);
+      alert('Merging PDFs failed: ' + (err && (err.message || JSON.stringify(err))));
+    } finally {
+      setMergeBusy(false);
+    }
+  }
+
+
+  // open full room view
+  function openFullRoom(room) {
+    setFullRoomData(room);
+    setFullRoomOpen(true);
+  }
+  function closeFullRoom() {
+    setFullRoomOpen(false);
+    setFullRoomData(null);
+  }
+
+  // bulk upload handler
+  async function handleBulkUpload() {
+    if (!bulkFile) {
+      alert('Choose a CSV/XLSX file first');
+      return;
+    }
+    setUploadBusy(true);
+    try {
+      const res = await api.bulkUploadStudents(bulkFile);
+      // backend expected to return { status:'ok', imported: N } or similar
+      alert('Upload succeeded: ' + (res && (res.message || JSON.stringify(res)) || 'OK'));
+      setBulkFile(null);
+      await loadData();
+    } catch (err) {
+      console.error('Bulk upload failed', err);
+      alert('Upload failed: ' + (err && (err.message || JSON.stringify(err))));
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  // Room grid component (kept compact)
   function RoomGrid({ room }) {
     const rows = room.rows || 6;
     const cols = room.cols || 5;
@@ -132,6 +241,10 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
                     className="px-2 py-1 text-xs bg-green-600 text-white rounded"
                     disabled={!!pdfBusyRoom[room.room_id]}>
               {pdfBusyRoom[room.room_id] ? 'Downloading…' : 'Download PDF'}
+            </button>
+            <button onClick={() => openFullRoom(room)}
+                    className="px-2 py-1 text-xs bg-sky-600 text-white rounded">
+              Open Full Room
             </button>
           </div>
         </div>
@@ -203,8 +316,36 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
 
       <main className="max-w-6xl mx-auto">
         <div className="flex items-center gap-3 mb-4">
-          <button onClick={loadData} className="px-3 py-1 rounded bg-sky-600 text-white">Refresh</button>
-          <div className="text-sm text-slate-500">{loading ? 'Loading...' : (error ? `Error: ${error}` : 'Loaded')}</div>
+  <button onClick={loadData} className="px-3 py-1 rounded bg-sky-600 text-white">
+    Refresh
+  </button>
+  <button
+    onClick={downloadAllRoomsPdf}
+    className="px-3 py-1 rounded bg-green-600 text-white"
+    disabled={mergeBusy}
+  >
+    {mergeBusy ? 'Merging…' : 'Download All PDF'}
+  </button>
+  <div className="text-sm text-slate-500">
+    {loading ? 'Loading...' : (error ? `Error: ${error}` : 'Loaded')}
+  </div>
+</div>
+
+
+        <div className="grid grid-cols-1 gap-6 mb-6">
+          {/* Bulk upload card */}
+          <div className="bg-white p-4 rounded shadow-sm flex items-center gap-4">
+            <div className="flex-1">
+              <div className="font-semibold mb-1">Bulk CSV / Excel Upload (Students)</div>
+              <div className="text-sm text-slate-500 mb-2">Expected columns: Student_ID, Roll_Number, Name, Course_Code, Branch, Semester</div>
+              <input type="file" accept=".csv, .xlsx, .xls" onChange={(e) => setBulkFile(e.target.files && e.target.files[0])} />
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <button className="px-4 py-2 rounded bg-sky-600 text-white" onClick={handleBulkUpload} disabled={uploadBusy}>
+                {uploadBusy ? 'Uploading…' : 'Upload CSV'}
+              </button>
+            </div>
+          </div>
         </div>
 
         {error && <div className="mb-4 p-3 bg-rose-50 text-rose-700 border border-rose-100 rounded">{error}</div>}
@@ -232,7 +373,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
         )}
       </main>
 
-      {/* Reassign Modal (unchanged) */}
+      {/* Reassign Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-md p-4 w-full max-w-md">
@@ -255,6 +396,36 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
               <button className="px-3 py-1 rounded bg-orange-600 text-white" onClick={doReassign} disabled={modalBusy || !selectedRoomId}>
                 {modalBusy ? "Working..." : "Confirm Reassign"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Room Modal */}
+      {fullRoomOpen && fullRoomData && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 py-10 overflow-auto">
+          <div className="bg-white rounded-md p-4 w-full max-w-5xl">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-xl font-semibold">Full Room — {fullRoomData.room_name || fullRoomData.room_id}</h3>
+                <div className="text-sm text-slate-500">Full seat grid + invigilators</div>
+              </div>
+              <div>
+                <button className="px-3 py-1 rounded border" onClick={closeFullRoom}>Close</button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="col-span-2">
+                {/* Reuse RoomGrid for the full room area */}
+                <RoomGrid room={fullRoomData} />
+              </div>
+              <aside className="col-span-1">
+                <div className="bg-slate-50 p-3 rounded">
+                  <h4 className="font-semibold mb-2">Invigilators</h4>
+                  <InvigList room={fullRoomData} />
+                </div>
+              </aside>
             </div>
           </div>
         </div>

@@ -1,65 +1,62 @@
 // frontend/src/App.jsx
-import React, { Suspense, lazy } from 'react';
+import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import Login from './pages/Login'; // create or ensure you have Login.jsx
+import StudentDashboard from './pages/StudentDashboard';
+import AdminExamPreview from './pages/AdminExamPreview';
+import InvigilatorDashboard from './pages/InvigilatorDashboard';
+import AdminLayout from './pages/admin/AdminLayout';
+import AdminStudents from './pages/admin/AdminStudents';
 import ProtectedRoute from './components/ProtectedRoute';
-import Header from './components/Header';
 import api from './services/api';
 
-// lazy-load existing pages (your existing files)
-const Login = lazy(() => import('./pages/Login'));
-const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
-const InvigilatorDashboard = lazy(() => import('./pages/InvigilatorDashboard'));
-const AdminExamPreview = lazy(() => import('./pages/AdminExamPreview'));
-
-// Small wrapper to inject header only on protected routes
-function ProtectedLayout({ children }) {
-  return (
-    <div className="min-h-screen bg-slate-50">
-      <Header />
-      <main className="max-w-6xl mx-auto p-6">
-        {children}
-      </main>
-    </div>
-  );
-}
-
-export default function App() {
+export default function App(){
+  // If you want login to auto-open as first page, ensure / route redirects to /login
   return (
     <BrowserRouter>
-      <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading…</div>}>
-        <Routes>
-          <Route path="/" element={<Navigate to="/login" replace />} />
+      <Routes>
+        <Route path="/" element={<Navigate to="/login" replace />} />
 
-          <Route path="/login" element={<Login />} />
+        <Route path="/login" element={<Login />} />
 
-          <Route path="/student" element={
-            <ProtectedRoute allowedRoles={['student']}>
-              <ProtectedLayout>
-                <StudentDashboard />
-              </ProtectedLayout>
-            </ProtectedRoute>
-          } />
+        {/* Student dashboard */}
+        <Route path="/student" element={
+          <ProtectedRoute allowedRoles={['student']}>
+            <StudentDashboard />
+          </ProtectedRoute>
+        } />
 
-          <Route path="/invigilator" element={
-            <ProtectedRoute allowedRoles={['invigilator']}>
-              <ProtectedLayout>
-                <InvigilatorDashboard />
-              </ProtectedLayout>
-            </ProtectedRoute>
-          } />
+        {/* Invigilator dashboard */}
+        <Route path="/invigilator" element={
+          <ProtectedRoute allowedRoles={['invigilator']}>
+            <InvigilatorDashboard />
+          </ProtectedRoute>
+        } />
 
-          <Route path="/admin" element={
-            <ProtectedRoute allowedRoles={['admin']}>
-              <ProtectedLayout>
-                <AdminExamPreview />
-              </ProtectedLayout>
-            </ProtectedRoute>
-          } />
+        
+        {/* Admin area with nested subpages */}
+<Route path="/admin" element={
+  <ProtectedRoute allowedRoles={['admin']}>
+    <AdminLayout />
+  </ProtectedRoute>
+}>
+  <Route index element={<Navigate to="students" replace />} />
+  <Route path="students" element={<AdminStudents />} />
+  <Route path="invigilators" element={<div className="p-4">Invigilators (coming)</div>} />
+  <Route path="rooms" element={<div className="p-4">Rooms (coming)</div>} />
+  <Route path="exams" element={<div className="p-4">Exams (coming)</div>} />
 
-          {/* Fallback */}
-          <Route path="*" element={<div className="p-6">Page not found — <a href="/login" className="text-sky-600">Go to login</a></div>} />
-        </Routes>
-      </Suspense>
+  {/* Admin Exam Preview (per-exam + shortcut preview) */}
+  {/* URL: /admin/preview  OR /admin/exams/:examId/preview */}
+  <Route path="preview" element={<AdminExamPreview />} />
+  <Route path="exams/:examId/preview" element={<AdminExamPreview />} />
+</Route>
+
+
+
+        {/* fallback */}
+        <Route path="*" element={<div className="p-6">Not found — <a href="/login">Go to login</a></div>} />
+      </Routes>
     </BrowserRouter>
   );
 }

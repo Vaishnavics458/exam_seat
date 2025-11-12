@@ -1,4 +1,6 @@
 // frontend/src/pages/StudentDashboard.jsx
+import { useNavigate } from 'react-router-dom';
+import api from '../services/api';
 import React, { useEffect, useState } from 'react';
 import { getStudentSeating, getAuthUser } from '../services/api';
 import SeatGrid from '../components/SeatGrid';
@@ -8,6 +10,8 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
+  const navigate = useNavigate();
+
 
   // if logged-in student, auto-load
   useEffect(() => {
@@ -48,6 +52,32 @@ export default function StudentDashboard() {
           {user ? `Signed in as: ${user.name || user.roll_number || user.email} (${user.role})` : 'Not signed in'}
         </div>
       </div>
+      {/* Header with signed-in info + logout */}
+<div className="flex items-center justify-between mb-4">
+  <div>
+    <h1 className="text-xl font-semibold">Student Dashboard</h1>
+    <div className="text-xs text-slate-500">
+      Signed in as: <span className="font-medium">
+        { (api.getAuthUser && api.getAuthUser()?.role) || 'student' }
+      </span>
+      { (api.getAuthUser && api.getAuthUser()?.roll_number) ? ` • ${api.getAuthUser().roll_number}` : '' }
+    </div>
+  </div>
+
+  <div>
+    <button
+      className="px-3 py-1 border rounded bg-white"
+      onClick={() => {
+        if (typeof api.setAuthToken === 'function') api.setAuthToken(null, null);
+        try { localStorage.removeItem('examseat_token'); localStorage.removeItem('examseat_user'); } catch (_) {}
+        navigate('/login', { replace: true });
+      }}
+    >
+      Logout
+    </button>
+  </div>
+</div>
+
 
       {/* If logged-in student, hide manual input and auto-loaded above */}
       {(!user || user.role !== 'student') && (

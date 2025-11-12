@@ -1,40 +1,25 @@
 // frontend/src/components/ProtectedRoute.jsx
 import React from 'react';
 import { Navigate } from 'react-router-dom';
-import api from '../services/api'; // default export from your api.js
+import api from '../services/api'; // api.getAuthUser / getAuthToken available
 
-/**
- * ProtectedRoute
- * - allowedRoles: array of roles e.g. ['admin'] or ['student']
- * - children: component to render when allowed
- *
- * Behavior:
- * - if no token -> redirect to /login
- * - if token but user role not in allowedRoles -> redirect to /login
- * - admin always allowed when 'admin' included in allowedRoles or when allowedRoles is omitted.
- */
-export default function ProtectedRoute({ allowedRoles = [], children }) {
-  const token = api.getAuthToken ? api.getAuthToken() : null;
-  const user = api.getAuthUser ? api.getAuthUser() : null;
+export default function ProtectedRoute({ children, allowedRoles = [] }) {
+  const user = api.getAuthUser();
+  const token = api.getAuthToken();
 
-  if (!token || !user) {
-    // not logged in
-    return <Navigate to="/login" replace />;
+  // not logged in -> redirect to login
+  if (!token || !user) return <Navigate to="/login" replace />;
+
+  // if allowedRoles is empty => allow only admin by default? (we'll treat empty as allow any authenticated)
+  if (Array.isArray(allowedRoles) && allowedRoles.length > 0) {
+    if (!allowedRoles.includes(user.role)) {
+      // redirect to the appropriate dashboard based on role
+      if (user.role === 'admin') return <Navigate to="/admin" replace />;
+      if (user.role === 'student') return <Navigate to="/student" replace />;
+      if (user.role === 'invigilator') return <Navigate to="/invigilator" replace />;
+      return <Navigate to="/login" replace />;
+    }
   }
 
-  // If allowedRoles empty -> require only authentication
-  if (allowedRoles.length === 0) return children;
-
-  // normalize role in user object (some tokens store role string)
-  const role = (user.role || user || '').toString();
-
-  // allow if role included
-  if (allowedRoles.includes(role)) return children;
-
-  // admin always allowed if 'admin' in allowedRoles OR if user.role === 'admin' and allowedRoles doesn't exclude?
-  // We'll allow admin if it exists in user.role even if not explicitly included, to keep admin omnipotent.
-  if (role === 'admin') return children;
-
-  // otherwise forbidden -> redirect
-  return <Navigate to="/login" replace />;
+  return children;
 }

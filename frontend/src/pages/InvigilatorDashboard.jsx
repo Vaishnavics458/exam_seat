@@ -1,4 +1,5 @@
 // frontend/src/pages/InvigilatorDashboard.jsx
+import { useNavigate } from 'react-router-dom';
 import React, { useEffect, useState } from "react";
 import api, { getAuthUser } from "../services/api";
 
@@ -9,6 +10,8 @@ export default function InvigilatorDashboard() {
   const [loadingInvs, setLoadingInvs] = useState(false);
   const [loadingDuties, setLoadingDuties] = useState(false);
   const [error, setError] = useState("");
+  const navigate = useNavigate();
+
 
   // on mount: fetch invigilators and try to preselect the logged-in user
 // inside InvigilatorDashboard.jsx - replace useEffect / initial load logic with:
@@ -79,6 +82,29 @@ useEffect(() => {
       <h1 className="text-2xl font-semibold text-sky-800 mb-4">
         Invigilator Duty Dashboard
       </h1>
+      {/* Header with role + logout */}
+<div className="flex items-center justify-between mb-4">
+  <div>
+    <h1 className="text-xl font-semibold text-sky-800">Invigilator Duty Dashboard</h1>
+    <div className="text-xs text-slate-500">
+      Signed in as: <span className="font-medium">{ (api.getAuthUser && api.getAuthUser()?.name) || (api.getAuthUser && api.getAuthUser()?.role) || 'invigilator' }</span>
+    </div>
+  </div>
+
+  <div>
+    <button
+      className="px-3 py-1 border rounded bg-white"
+      onClick={() => {
+        if (typeof api.setAuthToken === 'function') api.setAuthToken(null, null);
+        try { localStorage.removeItem('examseat_token'); localStorage.removeItem('examseat_user'); } catch (_) {}
+        navigate('/login', { replace: true });
+      }}
+    >
+      Logout
+    </button>
+  </div>
+</div>
+
 
       <div className="flex flex-col md:flex-row md:items-center gap-3 mb-6">
         <div className="flex-1">
