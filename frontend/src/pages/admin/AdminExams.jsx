@@ -110,6 +110,7 @@ export default function AdminExams() {
   }
 
   // regenerate seating or invigilation (calls existing endpoints)
+    // regenerate seating or invigilation (calls existing endpoints)
   async function regen(exam, type) {
     const key = `${type}_${exam.exam_id}`;
     setBusyMap(m => ({ ...m, [key]: true }));
@@ -117,12 +118,31 @@ export default function AdminExams() {
       if (type === 'seating') {
         await api.generateSeating(exam.exam_id);
         alert(`Seating regenerated for ${exam.exam_id}`);
+        // Add this line:
+        localStorage.setItem('lastRegeneratedExamId', exam.exam_id);
       } else {
         await api.generateInvigilation(exam.exam_id);
         alert(`Invigilation regenerated for ${exam.exam_id}`);
       }
-      // refresh data
-      await loadExams();
+
+      // refresh local list of exams
+      try {
+        await loadExams();
+      } catch (errLoad) {
+        console.warn('loadExams after regen failed', errLoad);
+      }
+
+      // dispatch global event so other pages (preview) reload their data
+      try {
+        if (typeof window !== 'undefined') {
+          const detail = { examId: exam.exam_id, type };
+          window.dispatchEvent(new CustomEvent('exam:regenerated', { detail }));
+          console.log('Dispatched exam:regenerated', detail);
+        }
+      } catch (errEv) {
+        console.warn('dispatch exam:regenerated failed', errEv);
+      }
+
     } catch (err) {
       console.error('regen error', err);
       alert(`${type} regeneration failed: ` + (err && (err.message || (err.payload && err.payload.error)) || String(err)));
@@ -130,6 +150,7 @@ export default function AdminExams() {
       setBusyMap(m => ({ ...m, [key]: false }));
     }
   }
+
 
   return (
     <div className="p-6 min-h-screen bg-slate-50">

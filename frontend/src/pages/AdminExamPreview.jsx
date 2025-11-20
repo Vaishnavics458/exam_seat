@@ -1,8 +1,8 @@
-﻿// frontend/src/pages/AdminExamPreview.jsx
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import api from "../services/api";
-// pdf-lib used to merge/compose PDFs client-side
 import { PDFDocument } from 'pdf-lib';
+import { useParams } from 'react-router-dom';
+import { useLocation } from "react-router-dom";
 
 /**
  * AdminExamPreview.jsx
@@ -17,7 +17,17 @@ import { PDFDocument } from 'pdf-lib';
  * (to avoid duplicate import names). Call functions as api.foo(...)
  */
 
-export default function AdminExamPreview({ examId = "E001_10AM" }) {
+export default function AdminExamPreview(props) {
+  const params = useParams();
+  const location = useLocation();
+
+  // If no examId in URL, use last regenerated examId from localStorage
+  const [examId, setExamId] = useState(
+    (params && params.examId) ||
+    (props && props.examId) ||
+    localStorage.getItem('lastRegeneratedExamId') ||
+    ""
+  );
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState(null);
   const [invigilation, setInvigilation] = useState(null);
@@ -42,9 +52,18 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
   async function loadData() {
     setError(null);
     setLoading(true);
+    if (!examId) {
+      setPreview(null);
+      setInvigilation(null);
+      setLoading(false);
+      setError("No exam selected. Please regenerate seating for an exam.");
+      return;
+    }
+    console.log('AdminExamPreview:loading preview for examId=', examId);
     try {
-      const pPromise = api.getExamPreview(examId);
-      const iPromise = api.getInvigilation(examId);
+      const pPromise = api.get(`/exams/${encodeURIComponent(examId)}/preview`, { headers: { 'Cache-Control': 'no-cache' } });
+      const iPromise = api.get(`/exams/${encodeURIComponent(examId)}/invigilation`, { headers: { 'Cache-Control': 'no-cache' } });
+
       const [pRes, iRes] = await Promise.allSettled([pPromise, iPromise]);
 
       if (pRes.status === "rejected") throw new Error("Preview fetch failed: " + (pRes.reason && pRes.reason.message));
@@ -62,7 +81,26 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     }
   }
 
-  useEffect(() => { loadData(); /* eslint-disable-line */ }, [examId]);
+  // Listen for exam:regenerated event and update examId
+  useEffect(() => {
+    function onRegenerate(e) {
+      try {
+        const detail = e && e.detail;
+        if (detail && detail.examId) {
+          localStorage.setItem('lastRegeneratedExamId', detail.examId);
+          setExamId(detail.examId);
+        }
+      } catch (err) { console.warn('onRegenerate handler error', err); }
+    }
+    window.addEventListener('exam:regenerated', onRegenerate);
+    return () => window.removeEventListener('exam:regenerated', onRegenerate);
+  }, []);
+
+  // Load data when examId changes
+  useEffect(() => {
+    if (examId) loadData();
+    // eslint-disable-next-line
+  }, [examId]);
 
   function getAllRooms() {
     if (!preview || !preview.rooms) return [];
@@ -132,7 +170,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     }
   }
 
-    // Merge all room PDFs into a single PDF and download
+  // Merge all room PDFs into a single PDF and download
   async function downloadAllRoomsPdf() {
     if (!preview || !preview.rooms || preview.rooms.length === 0) {
       alert('No rooms to download');
@@ -141,9 +179,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
 
     setMergeBusy(true);
     try {
-      // fetch all room PDFs in parallel (but keep concurrency reasonable)
       const rooms = preview.rooms || [];
-      // Map to promises of Blob
       const fetchPromises = rooms.map(async (room) => {
         try {
           const blob = await api.downloadSeatingPdf(examId, room.room_id);
@@ -156,13 +192,11 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
 
       const results = await Promise.all(fetchPromises);
 
-      // filter successful
       const successful = results.filter(r => r.blob);
       if (successful.length === 0) {
         throw new Error('No room PDFs could be retrieved.');
       }
 
-      // Create a new pdf-lib document and copy pages from each fetched PDF
       const mergedPdf = await PDFDocument.create();
 
       for (const item of successful) {
@@ -192,7 +226,6 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     }
   }
 
-
   // open full room view
   function openFullRoom(room) {
     setFullRoomData(room);
@@ -212,7 +245,6 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     setUploadBusy(true);
     try {
       const res = await api.bulkUploadStudents(bulkFile);
-      // backend expected to return { status:'ok', imported: N } or similar
       alert('Upload succeeded: ' + (res && (res.message || JSON.stringify(res)) || 'OK'));
       setBulkFile(null);
       await loadData();
@@ -311,26 +343,25 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     <div className="min-h-screen p-6 bg-slate-50">
       <header className="max-w-6xl mx-auto mb-6">
         <h1 className="text-2xl font-semibold text-sky-800">Admin — Exam Preview</h1>
-        <p className="text-sm text-slate-600">Exam: <span className="font-medium">{examId}</span></p>
+        <p className="text-sm text-slate-600">Exam: <span className="font-medium">{examId || "—"}</span></p>
       </header>
 
       <main className="max-w-6xl mx-auto">
         <div className="flex items-center gap-3 mb-4">
-  <button onClick={loadData} className="px-3 py-1 rounded bg-sky-600 text-white">
-    Refresh
-  </button>
-  <button
-    onClick={downloadAllRoomsPdf}
-    className="px-3 py-1 rounded bg-green-600 text-white"
-    disabled={mergeBusy}
-  >
-    {mergeBusy ? 'Merging…' : 'Download All PDF'}
-  </button>
-  <div className="text-sm text-slate-500">
-    {loading ? 'Loading...' : (error ? `Error: ${error}` : 'Loaded')}
-  </div>
-</div>
-
+          <button onClick={loadData} className="px-3 py-1 rounded bg-sky-600 text-white">
+            Refresh
+          </button>
+          <button
+            onClick={downloadAllRoomsPdf}
+            className="px-3 py-1 rounded bg-green-600 text-white"
+            disabled={mergeBusy}
+          >
+            {mergeBusy ? 'Merging…' : 'Download All PDF'}
+          </button>
+          <div className="text-sm text-slate-500">
+            {loading ? 'Loading...' : (error ? `Error: ${error}` : 'Loaded')}
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 gap-6 mb-6">
           {/* Bulk upload card */}
@@ -350,7 +381,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
 
         {error && <div className="mb-4 p-3 bg-rose-50 text-rose-700 border border-rose-100 rounded">{error}</div>}
 
-        {!preview && !loading ? (
+        {!preview && !loading && !error ? (
           <div className="text-slate-500">No preview data</div>
         ) : null}
 
@@ -417,7 +448,6 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
 
             <div className="grid grid-cols-3 gap-4">
               <div className="col-span-2">
-                {/* Reuse RoomGrid for the full room area */}
                 <RoomGrid room={fullRoomData} />
               </div>
               <aside className="col-span-1">
@@ -433,3 +463,7 @@ export default function AdminExamPreview({ examId = "E001_10AM" }) {
     </div>
   );
 }
+
+// Simulate exam:regenerated event for testing
+window.dispatchEvent(new CustomEvent('exam:regenerated', { detail: { examId: 'E001_10AM' } }));
+localStorage.setItem('lastRegeneratedExamId', 'E001_10AM');
